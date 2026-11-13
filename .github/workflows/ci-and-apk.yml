@@ -79,17 +79,18 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Ensure ImageMagick & Build Tools
+      - name: Setup Android SDK, Licenses & ImageMagick
         run: |
           if ! command -v convert >/dev/null 2>&1; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq imagemagick
           fi
           SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          SDKM="$(command -v sdkmanager || echo "$SDK_PATH/cmdline-tools/latest/bin/sdkmanager")"
+          echo "ANDROID_HOME=$SDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_PATH" >> "$GITHUB_ENV"
+          SDKM="$(command -v sdkmanager || ls -1 "$SDK_PATH"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          sudo mkdir -p "$SDK_PATH/licenses" && sudo chmod -R a+rwX "$SDK_PATH/licenses" || true
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
           if [ ! -d "$SDK_PATH/build-tools" ] || [ -z "$(ls -A "$SDK_PATH/build-tools" 2>/dev/null)" ]; then
             yes | "$SDKM" "build-tools;34.0.0" "platforms;android-34"
           fi
@@ -149,7 +150,7 @@ jobs:
           # Replace any default Capacitor splash screens with Rokto Dei branded splash
           find "$RES_DIR" -name "splash.png" | while read -r splash_file; do
             dims="$(identify -format "%wx%h" "$splash_file" 2>/dev/null || echo "480x800")"
-            convert -size "$dims" xc:"#FAF8F9" \( "$SRC_MASKABLE" -resize 360x360 \) -gravity center -composite "$splash_file"
+            convert -size "$dims" xc:"#FAF8F9" \( "$SRC_MASKABLE" -resize 220x220 \) -gravity center -composite "$splash_file"
           done
 
           node -e '
@@ -192,7 +193,7 @@ jobs:
 
           SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           BUILD_TOOLS="$(ls -d "$SDK_PATH"/build-tools/* | sort -V | tail -n 1)"
-          UNSIGNED_APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          UNSIGNED_APK="$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
 
           "$BUILD_TOOLS/zipalign" -v -p 4 "$UNSIGNED_APK" RoktoDei-aligned.apk
           "$BUILD_TOOLS/apksigner" sign \
@@ -228,15 +229,19 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Bubblewrap CLI
         run: npm install -g @bubblewrap/cli
 
       - name: Configure Bubblewrap Non-Interactively
         run: |
           SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_PATH" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_PATH" >> "$GITHUB_ENV"
+          SDKM="$(command -v sdkmanager || ls -1 "$SDK_PATH"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          if [ ! -d "$SDK_PATH/build-tools" ] || [ -z "$(ls -A "$SDK_PATH/build-tools" 2>/dev/null)" ]; then
+            yes | "$SDKM" "build-tools;34.0.0" "platforms;android-34"
+          fi
           mkdir -p ~/.bubblewrap
           cat <<EOF > ~/.bubblewrap/config.json
           {
