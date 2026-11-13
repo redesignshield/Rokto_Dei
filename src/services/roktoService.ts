@@ -1211,6 +1211,13 @@ async function checkServerContactGate(params: {
     body: JSON.stringify(params),
   });
 
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(
+      'সার্ভারের সাথে সংযোগ করা যায়নি। অনুগ্রহ করে ইন্টারনেট বা লাইভ ওয়েব ভার্সন ব্যবহার করে পুনরায় চেষ্টা করুন।'
+    );
+  }
+
   const body = (await response.json()) as {
     ok?: boolean;
     message?: string;

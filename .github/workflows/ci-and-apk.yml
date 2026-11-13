@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       app_url:
-        description: 'Deployed HTTPS PWA URL (e.g. https://your-app.run.app) to package into TWA APK'
-        required: true
-        default: 'https://ais-pre-6w6bd6hjdnl5nvcpi7cslo-465394495143.asia-east1.run.app'
+        description: 'Optional live HTTPS URL (for Play Store TWA APK via Bubblewrap). Leave blank to build standalone APK directly.'
+        required: false
+        default: ''
       package_id:
         description: 'Android applicationId (reverse domain format)'
         required: false
@@ -43,6 +43,8 @@ jobs:
         run: npm test -- --run
 
       - name: Build Production PWA Bundle
+        env:
+          VITE_API_BASE_URL: ${{ vars.APP_URL || '' }}
         run: npm run build
 
       - name: Upload Web Dist Artifact
@@ -51,8 +53,166 @@ jobs:
           name: roktodei-web-dist
           path: dist/
 
-  build-apk:
-    name: Package Android APK (TWA via Bubblewrap)
+  build-capacitor-apk:
+    name: Build Installable Android APK
+    needs: verify
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.app_url == '')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Built Web Bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: roktodei-web-dist
+          path: cap-build/dist
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java 17 (Capacitor 6)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Ensure ImageMagick & Build Tools
+        run: |
+          if ! command -v convert >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq imagemagick
+          fi
+          SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKM="$(command -v sdkmanager || echo "$SDK_PATH/cmdline-tools/latest/bin/sdkmanager")"
+          if [ ! -d "$SDK_PATH/build-tools" ] || [ -z "$(ls -A "$SDK_PATH/build-tools" 2>/dev/null)" ]; then
+            yes | "$SDKM" "build-tools;34.0.0" "platforms;android-34"
+          fi
+
+      - name: Initialize Capacitor Android Project
+        working-directory: cap-build
+        run: |
+          PKG_ID="${{ inputs.package_id || 'com.roktodei.app' }}"
+          APP_NAME="${{ inputs.app_name || 'Rokto Dei' }}"
+
+          cat <<EOF > package.json
+          {
+            "name": "roktodei-android",
+            "version": "1.0.0",
+            "private": true
+          }
+          EOF
+
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+
+          cat <<EOF > capacitor.config.json
+          {
+            "appId": "$PKG_ID",
+            "appName": "$APP_NAME",
+            "webDir": "dist",
+            "server": {
+              "androidScheme": "https"
+            }
+          }
+          EOF
+
+          npx cap add android
+          npx cap sync android
+
+      - name: Configure Rokto Dei App Icons, Splash & Permissions
+        run: |
+          RES_DIR="cap-build/android/app/src/main/res"
+          SRC_ICON="public/pwa-512x512.png"
+          SRC_MASKABLE="public/pwa-maskable-512x512.png"
+
+          generate_icon_set() {
+            local density="$1"
+            local size="$2"
+            local fg_size="$3"
+            mkdir -p "$RES_DIR/mipmap-$density"
+            convert "$SRC_ICON" -resize "${size}x${size}" "$RES_DIR/mipmap-$density/ic_launcher.png"
+            convert "$SRC_ICON" -resize "${size}x${size}" "$RES_DIR/mipmap-$density/ic_launcher_round.png"
+            convert "$SRC_MASKABLE" -resize "${fg_size}x${fg_size}" "$RES_DIR/mipmap-$density/ic_launcher_foreground.png"
+          }
+
+          generate_icon_set mdpi 48 108
+          generate_icon_set hdpi 72 162
+          generate_icon_set xhdpi 96 216
+          generate_icon_set xxhdpi 144 324
+          generate_icon_set xxxhdpi 192 432
+
+          # Replace any default Capacitor splash screens with Rokto Dei branded splash
+          find "$RES_DIR" -name "splash.png" | while read -r splash_file; do
+            dims="$(identify -format "%wx%h" "$splash_file" 2>/dev/null || echo "480x800")"
+            convert -size "$dims" xc:"#FAF8F9" \( "$SRC_MASKABLE" -resize 360x360 \) -gravity center -composite "$splash_file"
+          done
+
+          node -e '
+            const fs = require("fs");
+            const p = "cap-build/android/app/src/main/AndroidManifest.xml";
+            let xml = fs.readFileSync(p, "utf8");
+            const perms = [
+              "<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\" />",
+              "<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\" />"
+            ].filter(line => !xml.includes(line)).join("\n    ");
+            if (perms) {
+              xml = xml.replace("<application", perms + "\n\n    <application");
+              fs.writeFileSync(p, xml);
+            }
+          '
+
+      - name: Build & Sign Release APK
+        working-directory: cap-build
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.BUBBLEWRAP_KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.BUBBLEWRAP_KEY_PASSWORD }}
+        run: |
+          chmod +x android/gradlew
+          (cd android && ./gradlew assembleRelease --no-daemon)
+
+          STORE_PASS="${KS_PASS:-roktodei123}"
+          ALIAS_PASS="${KEY_PASS:-$STORE_PASS}"
+
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > android.keystore
+          else
+            keytool -genkeypair -v \
+              -keystore android.keystore \
+              -alias roktodei \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$STORE_PASS" -keypass "$ALIAS_PASS" \
+              -dname "CN=Rokto Dei, OU=Mobile, O=Rokto Dei, L=Dhaka, ST=Dhaka, C=BD"
+          fi
+
+          SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          BUILD_TOOLS="$(ls -d "$SDK_PATH"/build-tools/* | sort -V | tail -n 1)"
+          UNSIGNED_APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+
+          "$BUILD_TOOLS/zipalign" -v -p 4 "$UNSIGNED_APK" RoktoDei-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks android.keystore \
+            --ks-key-alias roktodei \
+            --ks-pass "pass:$STORE_PASS" \
+            --key-pass "pass:$ALIAS_PASS" \
+            --out RoktoDei-v1.0.0.apk \
+            RoktoDei-aligned.apk
+          "$BUILD_TOOLS/apksigner" verify RoktoDei-v1.0.0.apk
+
+      - name: Upload Signed Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roktodei-android-apk
+          if-no-files-found: error
+          path: cap-build/RoktoDei-v1.0.0.apk
+
+  build-twa-apk:
+    name: Package Play Store TWA APK (Bubblewrap)
     needs: verify
     if: github.event_name == 'workflow_dispatch' && inputs.app_url != ''
     runs-on: ubuntu-latest
@@ -162,10 +322,10 @@ jobs:
           bubblewrap update --skipVersionUpgrade
           bubblewrap build --skipPwaValidation
 
-      - name: Upload Android APK & Bundle Artifacts
+      - name: Upload TWA APK & Bundle Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: roktodei-android-apk
+          name: roktodei-twa-apk
           if-no-files-found: error
           path: |
             twa-build/*.apk
