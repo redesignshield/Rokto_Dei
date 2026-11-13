@@ -1,0 +1,1141 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Canonical single account profile per user supporting both blood seeker and optional donor journeys.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the account owner."
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80,
+          "description": "Display name of the user."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30,
+          "pattern": "^[a-zA-Z0-9_]+$",
+          "description": "Unique public handle of the user."
+        },
+        "usernameLower": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30,
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Normalized lowercase unique username handle."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 160,
+          "description": "Authenticated email address."
+        },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["active", "suspended", "deactivated"],
+          "description": "Current lifecycle status of the user account."
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "enum": ["bn", "en"],
+          "description": "Preferred UI language."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of account creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last profile update."
+        }
+      },
+      "required": [
+        "uid",
+        "fullName",
+        "email",
+        "accountStatus",
+        "preferredLanguage",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DonorProfile": {
+      "title": "DonorProfile",
+      "description": "Public-safe searchable donor profile linked to the same user UID without phone number or email.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Same Firebase Auth UID as users/{uid}."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80,
+          "description": "Name shown on donor search cards."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30,
+          "pattern": "^[a-zA-Z0-9_]+$",
+          "description": "Unique username handle."
+        },
+        "bloodGroup": {
+          "type": "string",
+          "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"],
+          "description": "ABO and Rh blood group."
+        },
+        "divisionId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "Normalized Bangladesh division identifier."
+        },
+        "districtId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "Normalized Bangladesh district identifier."
+        },
+        "upazilaId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 50,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "Normalized Bangladesh upazila/thana identifier."
+        },
+        "availability": {
+          "type": "string",
+          "enum": ["available", "temporarily_unavailable", "not_specified"],
+          "description": "Self-reported donor availability status."
+        },
+        "lastAvailabilityUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last availability update."
+        },
+        "contactMethods": {
+          "type": "array",
+          "description": "Enabled contact channels from call, sms, whatsapp, imo."
+        },
+        "hasConsented": {
+          "type": "boolean",
+          "description": "Explicit donor consent to disclose phone to signed-in email-verified users."
+        },
+        "contactConsentAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when donor consent was recorded."
+        },
+        "isListed": {
+          "type": "boolean",
+          "description": "Whether donor profile is active in search results."
+        },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["active", "suspended", "deactivated"],
+          "description": "Moderation and account status mirrored for search filtering."
+        },
+        "emailVerified": {
+          "type": "boolean",
+          "description": "Email verification indicator verified against Firebase Auth token."
+        },
+        "lastDonationDate": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^(|[0-9]{4}-[0-9]{2}-[0-9]{2})$",
+          "description": "Optional YYYY-MM-DD date of last blood donation or empty string."
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["male", "female", "other", "not_specified"],
+          "description": "Optional donor gender."
+        },
+        "ageYears": {
+          "type": "integer",
+          "description": "Optional age in years (0 when unspecified, 18-65 typical)."
+        },
+        "weightKg": {
+          "type": "integer",
+          "description": "Optional approximate weight in kg (0 when unspecified)."
+        },
+        "donationPreference": {
+          "type": "string",
+          "enum": ["whole_blood", "platelet", "both"],
+          "description": "Preferred donation component type."
+        },
+        "nightCallPreference": {
+          "type": "string",
+          "enum": ["anytime", "daytime_only", "message_first"],
+          "description": "Donor preference regarding late-night emergency phone calls."
+        },
+        "occupation": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Optional occupation or educational institution."
+        },
+        "preferredHospitalArea": {
+          "type": "string",
+          "maxLength": 140,
+          "description": "Optional nearby hospitals or areas convenient for donation."
+        },
+        "donorNote": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "Optional non-sensitive note from donor."
+        },
+        "totalDonationsCount": {
+          "type": "integer",
+          "description": "Cumulative count of blood donations."
+        },
+        "totalVolumeMl": {
+          "type": "integer",
+          "description": "Cumulative blood volume donated in milliliters."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when donor profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when donor profile was updated."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "bloodGroup",
+        "divisionId",
+        "districtId",
+        "upazilaId",
+        "availability",
+        "lastAvailabilityUpdatedAt",
+        "contactMethods",
+        "hasConsented",
+        "contactConsentAt",
+        "isListed",
+        "accountStatus",
+        "emailVerified",
+        "lastDonationDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DonorPrivateContact": {
+      "title": "DonorPrivateContact",
+      "description": "Restricted donor phone number isolated from public/search documents.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner donor UID."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "minLength": 14,
+          "maxLength": 14,
+          "pattern": "^\\+8801[3-9][0-9]{8}$",
+          "description": "Normalized E.164 Bangladesh mobile number (+8801XXXXXXXXX)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of initial phone storage."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest phone update."
+        }
+      },
+      "required": ["uid", "phoneNumber", "createdAt", "updatedAt"]
+    },
+    "DonationRecord": {
+      "title": "DonationRecord",
+      "description": "Individual historical blood donation entry recording when, where, and how much a donor donated.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Donation record ID."
+        },
+        "donorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner donor UID."
+        },
+        "donorName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80,
+          "description": "Donor display name for admin audit visibility."
+        },
+        "bloodGroup": {
+          "type": "string",
+          "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"],
+          "description": "Blood group."
+        },
+        "donationDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "Date of donation in YYYY-MM-DD format."
+        },
+        "hospitalOrCenter": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120,
+          "description": "Hospital, clinic, or blood bank where blood was donated."
+        },
+        "divisionId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "Division ID."
+        },
+        "districtId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "District ID."
+        },
+        "upazilaId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 50,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "Upazila ID."
+        },
+        "volumeMl": {
+          "type": "integer",
+          "description": "Donated volume in milliliters (150 to 1500)."
+        },
+        "units": {
+          "type": "integer",
+          "description": "Number of bags/units donated (1 to 4)."
+        },
+        "donationType": {
+          "type": "string",
+          "enum": ["whole_blood", "platelet", "plasma"],
+          "description": "Component donated."
+        },
+        "recipientSummary": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "Optional non-confidential note on donation context."
+        },
+        "linkedRequestId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional linked blood request ID."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of entry creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of entry update."
+        }
+      },
+      "required": [
+        "id",
+        "donorUid",
+        "donorName",
+        "bloodGroup",
+        "donationDate",
+        "hospitalOrCenter",
+        "divisionId",
+        "districtId",
+        "upazilaId",
+        "volumeMl",
+        "units",
+        "donationType",
+        "recipientSummary",
+        "linkedRequestId",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ContactAccessLog": {
+      "title": "ContactAccessLog",
+      "description": "Immutable metadata record created before resolving a donor contact channel.",
+      "type": "object",
+      "properties": {
+        "callerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated UID of the verified blood seeker."
+        },
+        "donorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target donor UID."
+        },
+        "requestedMethod": {
+          "type": "string",
+          "enum": ["call", "sms", "whatsapp", "imo"],
+          "description": "Selected contact channel."
+        },
+        "accessCount": {
+          "type": "integer",
+          "description": "Cumulative lookup counter for this caller-donor pair."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of first contact lookup."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest contact lookup."
+        }
+      },
+      "required": [
+        "callerUid",
+        "donorUid",
+        "requestedMethod",
+        "accessCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BloodRequest": {
+      "title": "BloodRequest",
+      "description": "Public-safe blood request posted by a verified user without exposing raw phone number in list results.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Blood request document ID."
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Creator user UID."
+        },
+        "requesterName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80,
+          "description": "Contact person name."
+        },
+        "bloodGroup": {
+          "type": "string",
+          "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"],
+          "description": "Required blood group."
+        },
+        "units": {
+          "type": "integer",
+          "description": "Number of bags/units required (1 to 10)."
+        },
+        "divisionId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "Division ID."
+        },
+        "districtId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "District ID."
+        },
+        "upazilaId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 50,
+          "pattern": "^[a-z0-9_\\-]+$",
+          "description": "Upazila ID."
+        },
+        "hospitalName": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "description": "Hospital or clinic name."
+        },
+        "urgency": {
+          "type": "string",
+          "enum": ["emergency", "urgent", "scheduled"],
+          "description": "Urgency level of blood requirement."
+        },
+        "requiredDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "Required date in YYYY-MM-DD format."
+        },
+        "patientNote": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "Additional context without sensitive medical records."
+        },
+        "contactMethods": {
+          "type": "array",
+          "description": "Enabled contact channels for this blood request."
+        },
+        "hasConsented": {
+          "type": "boolean",
+          "description": "Explicit consent to disclose requester contact to verified users."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "booked", "fulfilled", "cancelled", "expired", "removed"],
+          "description": "Lifecycle state of the blood request. When 'booked', phone access is locked to stop unwanted calls."
+        },
+        "bookedDonorUid": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional UID of the confirmed donor."
+        },
+        "bookedDonorName": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Name of the confirmed donor when booked."
+        },
+        "bookingNote": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "Optional note regarding the booking / arrival schedule."
+        },
+        "bookedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the request was booked."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update."
+        }
+      },
+      "required": [
+        "id",
+        "createdBy",
+        "requesterName",
+        "bloodGroup",
+        "units",
+        "divisionId",
+        "districtId",
+        "upazilaId",
+        "hospitalName",
+        "urgency",
+        "requiredDate",
+        "patientNote",
+        "contactMethods",
+        "hasConsented",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BloodRequestPrivateContact": {
+      "title": "BloodRequestPrivateContact",
+      "description": "Protected phone number for an open blood request.",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Linked blood request ID."
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Creator user UID."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "minLength": 14,
+          "maxLength": 14,
+          "pattern": "^\\+8801[3-9][0-9]{8}$",
+          "description": "Normalized E.164 Bangladesh mobile number."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of update."
+        }
+      },
+      "required": ["requestId", "createdBy", "phoneNumber", "createdAt", "updatedAt"]
+    },
+    "RequestPledge": {
+      "title": "RequestPledge",
+      "description": "Commitment/offer from a verified donor to donate for a specific open blood request so the requester can book them in 1 click.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Deterministic ID: {requestId}_{donorUid}."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target blood request ID."
+        },
+        "requestCreatorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the blood request creator."
+        },
+        "hospitalName": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 120,
+          "description": "Denormalized hospital name for activity & profile display."
+        },
+        "donorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the offering donor."
+        },
+        "donorName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80,
+          "description": "Display name of the offering donor."
+        },
+        "donorBloodGroup": {
+          "type": "string",
+          "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"],
+          "description": "Donor blood group."
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "Short coordination message (e.g. phone call confirmed, arrival time)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["offered", "accepted", "declined", "withdrawn"],
+          "description": "Coordination state."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when pledge was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when pledge was updated."
+        }
+      },
+      "required": [
+        "id",
+        "requestId",
+        "requestCreatorUid",
+        "hospitalName",
+        "donorUid",
+        "donorName",
+        "donorBloodGroup",
+        "message",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AbuseReport": {
+      "title": "AbuseReport",
+      "description": "User-submitted report against an inaccurate, fake, or abusive donor or blood request.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Report document ID."
+        },
+        "reportedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of reporting user."
+        },
+        "targetType": {
+          "type": "string",
+          "enum": ["donor", "blood_request"],
+          "description": "Type of entity being reported."
+        },
+        "targetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Document ID of reported entity."
+        },
+        "targetUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner UID of reported entity."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "incorrect_phone",
+            "abusive_contact",
+            "fake_profile",
+            "spam",
+            "misleading_availability",
+            "other"
+          ],
+          "description": "Structured report category."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional context provided by reporter."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "reviewing", "resolved", "dismissed"],
+          "description": "Moderation review status."
+        },
+        "reviewedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Admin UID who reviewed the report, or empty string."
+        },
+        "resolutionNote": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "Admin resolution note, or empty string."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of report submission."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last status change."
+        }
+      },
+      "required": [
+        "id",
+        "reportedBy",
+        "targetType",
+        "targetId",
+        "targetUid",
+        "reason",
+        "description",
+        "status",
+        "reviewedBy",
+        "resolutionNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Server/Super-Admin controlled role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target admin/moderator UID."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "moderator"],
+          "description": "Assigned administrative role."
+        },
+        "grantedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Super admin UID who granted the role."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when role was granted."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when role was updated."
+        }
+      },
+      "required": ["uid", "role", "grantedBy", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable administrative action log.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Audit log ID."
+        },
+        "actorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Admin UID who executed the action."
+        },
+        "actorEmail": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 160,
+          "description": "Admin email."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "suspend_user",
+            "restore_user",
+            "unlist_donor",
+            "relist_donor",
+            "resolve_report",
+            "dismiss_report",
+            "review_report",
+            "remove_blood_request",
+            "reopen_blood_request",
+            "remove_donation_record",
+            "grant_moderator",
+            "revoke_moderator"
+          ],
+          "description": "Privileged action identifier."
+        },
+        "targetType": {
+          "type": "string",
+          "enum": [
+            "user",
+            "donor",
+            "report",
+            "blood_request",
+            "donation_record",
+            "admin_role"
+          ],
+          "description": "Target resource category."
+        },
+        "targetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target document ID."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 400,
+          "description": "Recorded administrative justification."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "actorUid",
+        "actorEmail",
+        "action",
+        "targetType",
+        "targetId",
+        "reason",
+        "createdAt"
+      ]
+    },
+    "NotificationRecord": {
+      "title": "NotificationRecord",
+      "description": "Real-time user notification delivered across devices for donor pledges, booking confirmations, moderator role grants/revocations, and urgent alerts.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Notification document ID."
+        },
+        "targetUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target recipient user UID."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "pledge_received",
+            "donor_booked",
+            "pledge_accepted",
+            "moderator_granted",
+            "moderator_revoked",
+            "user_status_changed",
+            "emergency_alert",
+            "eligibility_reminder",
+            "system_update"
+          ],
+          "description": "Categorized notification event type."
+        },
+        "titleBn": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140,
+          "description": "Bengali notification headline."
+        },
+        "titleEn": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140,
+          "description": "English notification headline."
+        },
+        "messageBn": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 600,
+          "description": "Bengali notification detail message."
+        },
+        "messageEn": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 600,
+          "description": "English notification detail message."
+        },
+        "targetView": {
+          "type": "string",
+          "enum": [
+            "find_donors",
+            "blood_requests",
+            "how_it_works",
+            "safety",
+            "profile",
+            "admin",
+            "privacy",
+            "terms"
+          ],
+          "description": "Target app view to open upon user click."
+        },
+        "targetId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional target request ID or resource identifier."
+        },
+        "targetDonorUid": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional donor UID to immediately open donor profile modal."
+        },
+        "urgency": {
+          "type": "string",
+          "enum": ["emergency", "urgent", "info"],
+          "description": "Visual priority of the alert."
+        },
+        "read": {
+          "type": "boolean",
+          "description": "Whether recipient has marked the notification as read."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of notification dispatch."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of notification read or update."
+        }
+      },
+      "required": [
+        "id",
+        "targetUid",
+        "type",
+        "titleBn",
+        "titleEn",
+        "messageBn",
+        "messageEn",
+        "targetView",
+        "urgency",
+        "read",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UsernameReservation": {
+      "title": "UsernameReservation",
+      "description": "Global unique username reservation index ensuring no two users can share the same username handle.",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30,
+          "pattern": "^[a-zA-Z0-9_]+$",
+          "description": "Original cased username handle chosen by user."
+        },
+        "usernameLower": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30,
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Case-insensitive lowercase document key."
+        },
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID owning this reserved username."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of username reservation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update."
+        }
+      },
+      "required": [
+        "username",
+        "usernameLower",
+        "uid",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Canonical account profile restricted to owner and admins."
+    },
+    "/donors/{uid}": {
+      "schema": { "$ref": "#/entities/DonorProfile" },
+      "description": "Public-safe searchable donor directory documents without phone PII."
+    },
+    "/donorPrivate/{uid}": {
+      "schema": { "$ref": "#/entities/DonorPrivateContact" },
+      "description": "Restricted donor phone contact records accessible only via authorized contact resolution."
+    },
+    "/donationRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/DonationRecord" },
+      "description": "Individual blood donation history records owned by donors and visible to admins."
+    },
+    "/contactAccessLogs/{logId}": {
+      "schema": { "$ref": "#/entities/ContactAccessLog" },
+      "description": "Immutable server-timestamped metadata records of donor contact lookups."
+    },
+    "/bloodRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/BloodRequest" },
+      "description": "Public-safe emergency/scheduled blood requests with donor booking state and without raw phone numbers."
+    },
+    "/bloodRequestPrivate/{requestId}": {
+      "schema": { "$ref": "#/entities/BloodRequestPrivateContact" },
+      "description": "Restricted phone numbers accessible only while linked blood request status is strictly 'open'."
+    },
+    "/requestPledges/{pledgeId}": {
+      "schema": { "$ref": "#/entities/RequestPledge" },
+      "description": "Verified donor offers/commitments on open blood requests visible to donor, request creator, and admins."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/AbuseReport" },
+      "description": "User reports against inaccurate or abusive listings for moderator review."
+    },
+    "/adminRoles/{uid}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Server-authoritative moderator and admin role assignments."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Append-only audit history of administrative moderation actions."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationRecord" },
+      "description": "Real-time user notifications delivered to specific accounts with instant Firestore onSnapshot sync."
+    },
+    "/usernames/{usernameLower}": {
+      "schema": { "$ref": "#/entities/UsernameReservation" },
+      "description": "Unique username registry index documents where document ID is the lowercase username."
+    }
+  }
+}

@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Noto Sans Bengali", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Plus Jakarta Sans", "Noto Sans Bengali", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  --brand-crimson: #c80828;
+  --brand-crimson-hover: #a3051e;
+  --brand-blush: #fdf2f4;
+  --brand-blush-strong: #fadce2;
+  --brand-blush-border: #f7d4dc;
+  --surface-canvas: #faf8f9;
+  --ink-primary: #1f242d;
+}
+
+@layer base {
+  html,
+  body {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    background-color: var(--surface-canvas);
+    color: var(--ink-primary);
+    overflow-x: hidden;
+    max-width: 100%;
+    width: 100%;
+  }
+
+  #root {
+    overflow-x: hidden;
+    max-width: 100%;
+    width: 100%;
+    min-height: 100vh;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

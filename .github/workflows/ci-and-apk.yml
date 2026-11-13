@@ -1,0 +1,174 @@
+name: Verify & Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: 'Deployed HTTPS PWA URL (e.g. https://your-app.run.app) to package into TWA APK'
+        required: true
+        default: 'https://ais-pre-6w6bd6hjdnl5nvcpi7cslo-465394495143.asia-east1.run.app'
+      package_id:
+        description: 'Android applicationId (reverse domain format)'
+        required: false
+        default: 'com.roktodei.app'
+      app_name:
+        description: 'Android Launcher App Name'
+        required: false
+        default: 'Rokto Dei'
+
+jobs:
+  verify:
+    name: TypeCheck, Rules Lint, Tests & Production Web Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Run TypeScript & Firestore Rules Lint
+        run: npm run lint
+
+      - name: Run Security & Logic Tests
+        run: npm test -- --run
+
+      - name: Build Production PWA Bundle
+        run: npm run build
+
+      - name: Upload Web Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roktodei-web-dist
+          path: dist/
+
+  build-apk:
+    name: Package Android APK (TWA via Bubblewrap)
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && inputs.app_url != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Bubblewrap CLI
+        run: npm install -g @bubblewrap/cli
+
+      - name: Configure Bubblewrap Non-Interactively
+        run: |
+          SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p ~/.bubblewrap
+          cat <<EOF > ~/.bubblewrap/config.json
+          {
+            "jdkPath": "$JAVA_HOME",
+            "androidSdkPath": "$SDK_PATH"
+          }
+          EOF
+          bubblewrap updateConfig --jdkPath="$JAVA_HOME" --androidSdkPath="$SDK_PATH"
+
+      - name: Prepare Keystore & TWA Manifest
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.BUBBLEWRAP_KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.BUBBLEWRAP_KEY_PASSWORD }}
+        run: |
+          mkdir -p twa-build && cd twa-build
+          STORE_PASS="${KS_PASS:-roktodei123}"
+          ALIAS_PASS="${KEY_PASS:-$STORE_PASS}"
+
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > android.keystore
+          else
+            keytool -genkeypair -v \
+              -keystore android.keystore \
+              -alias roktodei \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$STORE_PASS" -keypass "$ALIAS_PASS" \
+              -dname "CN=Rokto Dei, OU=Mobile, O=Rokto Dei, L=Dhaka, ST=Dhaka, C=BD"
+          fi
+
+          echo "=== Copy this SHA-256 into ASSETLINKS_SHA256 or public/.well-known/assetlinks.json ==="
+          keytool -list -v -keystore android.keystore -alias roktodei -storepass "$STORE_PASS" | grep "SHA256:"
+
+          APP_URL="${{ inputs.app_url }}"
+          APP_URL="${APP_URL%/}"
+          HOST="$(echo "$APP_URL" | sed -E 's|^https?://([^/]+).*|\1|')"
+
+          if ! curl -fsSLI "$APP_URL/pwa-512x512.png" >/dev/null 2>&1; then
+            echo "::error::Target app_url ($APP_URL) is not reachable or has not been deployed yet (missing /pwa-512x512.png). Please publish/deploy the web app first and pass its live HTTPS URL."
+            exit 1
+          fi
+
+          cat <<EOF > twa-manifest.json
+          {
+            "packageId": "${{ inputs.package_id }}",
+            "host": "$HOST",
+            "name": "${{ inputs.app_name }}",
+            "launcherName": "${{ inputs.app_name }}",
+            "display": "standalone",
+            "themeColor": "#C80828",
+            "navigationColor": "#C80828",
+            "navigationColorDark": "#99061E",
+            "navigationDividerColor": "#C80828",
+            "backgroundColor": "#FAF8F9",
+            "enableNotifications": true,
+            "startUrl": "/?apk=1",
+            "iconUrl": "$APP_URL/pwa-512x512.png",
+            "maskableIconUrl": "$APP_URL/pwa-maskable-512x512.png",
+            "signingKey": {
+              "path": "./android.keystore",
+              "alias": "roktodei"
+            },
+            "appVersionName": "1.0.0",
+            "appVersionCode": 1,
+            "shortcuts": [],
+            "generatorApp": "bubblewrap-cli",
+            "webManifestUrl": "$APP_URL/manifest.webmanifest",
+            "fallbackType": "customtabs",
+            "features": {
+              "locationDelegation": {
+                "enabled": true
+              }
+            }
+          }
+          EOF
+
+      - name: Build Signed TWA APK & AAB
+        working-directory: twa-build
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.BUBBLEWRAP_KEYSTORE_PASSWORD || 'roktodei123' }}
+          BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.BUBBLEWRAP_KEY_PASSWORD || 'roktodei123' }}
+        run: |
+          bubblewrap update --skipVersionUpgrade
+          bubblewrap build --skipPwaValidation
+
+      - name: Upload Android APK & Bundle Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: roktodei-android-apk
+          if-no-files-found: error
+          path: |
+            twa-build/*.apk
+            twa-build/*.aab
+            twa-build/app/build/outputs/apk/**/*.apk
+            twa-build/app/build/outputs/bundle/**/*.aab

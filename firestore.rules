@@ -1,0 +1,989 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // Global Default-Deny Safety Net
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Primitive Helpers
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedEmail() && request.auth.token.email == 'info.redesignshield@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedEmail() &&
+        exists(/databases/$(database)/documents/adminRoles/$(request.auth.uid))
+      );
+    }
+
+    function isCallerActiveUser() {
+      return isVerifiedEmail() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus == 'active';
+    }
+
+    function isValidBloodGroup(bg) {
+      return bg is string && bg in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+    }
+
+    function isValidSlug(val, maxLen) {
+      return val is string && val.size() >= 2 && val.size() <= maxLen && val.matches('^[a-z0-9_\\-]+$');
+    }
+
+    function isValidBdPhone(phone) {
+      return phone is string && phone.size() == 14 && phone.matches('^\\+8801[3-9][0-9]{8}$');
+    }
+
+    function isValidContactMethodsList(methods, minSize) {
+      return methods is list &&
+        methods.size() >= minSize &&
+        methods.size() <= 4 &&
+        methods.hasOnly(['call', 'sms', 'whatsapp', 'imo']) &&
+        (methods.size() == 0 || methods[0] is string);
+    }
+
+    // =========================================================================
+    // Entity Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'fullName', 'email', 'accountStatus',
+          'preferredLanguage', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'fullName', 'username', 'usernameLower', 'email', 'accountStatus',
+          'preferredLanguage', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 80 &&
+        (!('username' in data) || (data.username is string && data.username.size() >= 3 && data.username.size() <= 30 && data.username.matches('^[a-zA-Z0-9_]+$'))) &&
+        (!('usernameLower' in data) || (data.usernameLower is string && data.usernameLower.size() >= 3 && data.usernameLower.size() <= 30 && data.usernameLower.matches('^[a-z0-9_]+$'))) &&
+        data.email is string && data.email.size() >= 5 && data.email.size() <= 160 &&
+        data.accountStatus is string && data.accountStatus in ['active', 'suspended', 'deactivated'] &&
+        data.preferredLanguage is string && data.preferredLanguage in ['bn', 'en'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDonorProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'bloodGroup', 'divisionId', 'districtId', 'upazilaId',
+          'availability', 'lastAvailabilityUpdatedAt', 'contactMethods', 'hasConsented',
+          'contactConsentAt', 'isListed', 'accountStatus', 'emailVerified',
+          'lastDonationDate', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'displayName', 'username', 'bloodGroup', 'divisionId', 'districtId', 'upazilaId',
+          'availability', 'lastAvailabilityUpdatedAt', 'contactMethods', 'hasConsented',
+          'contactConsentAt', 'isListed', 'accountStatus', 'emailVerified',
+          'lastDonationDate', 'gender', 'ageYears', 'weightKg', 'donationPreference',
+          'nightCallPreference', 'occupation', 'preferredHospitalArea', 'donorNote',
+          'totalDonationsCount', 'totalVolumeMl', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 80 &&
+        (!('username' in data) || (data.username is string && data.username.size() >= 3 && data.username.size() <= 30 && data.username.matches('^[a-zA-Z0-9_]+$'))) &&
+        isValidBloodGroup(data.bloodGroup) &&
+        isValidSlug(data.divisionId, 40) &&
+        isValidSlug(data.districtId, 40) &&
+        isValidSlug(data.upazilaId, 50) &&
+        data.availability is string && data.availability in ['available', 'temporarily_unavailable', 'not_specified'] &&
+        data.lastAvailabilityUpdatedAt is timestamp &&
+        isValidContactMethodsList(data.contactMethods, 0) &&
+        data.hasConsented is bool &&
+        data.contactConsentAt is timestamp &&
+        data.isListed is bool &&
+        (!data.isListed || (data.hasConsented == true && data.contactMethods.size() >= 1)) &&
+        data.accountStatus is string && data.accountStatus in ['active', 'suspended', 'deactivated'] &&
+        data.emailVerified is bool &&
+        data.lastDonationDate is string && data.lastDonationDate.size() <= 10 &&
+        (data.lastDonationDate == '' || data.lastDonationDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')) &&
+        (!('gender' in data) || (data.gender is string && data.gender in ['male', 'female', 'other', 'not_specified'])) &&
+        (!('ageYears' in data) || (data.ageYears is int && data.ageYears >= 0 && data.ageYears <= 80)) &&
+        (!('weightKg' in data) || (data.weightKg is int && data.weightKg >= 0 && data.weightKg <= 200)) &&
+        (!('donationPreference' in data) || (data.donationPreference is string && data.donationPreference in ['whole_blood', 'platelet', 'both'])) &&
+        (!('nightCallPreference' in data) || (data.nightCallPreference is string && data.nightCallPreference in ['anytime', 'daytime_only', 'message_first'])) &&
+        (!('occupation' in data) || (data.occupation is string && data.occupation.size() <= 80)) &&
+        (!('preferredHospitalArea' in data) || (data.preferredHospitalArea is string && data.preferredHospitalArea.size() <= 140)) &&
+        (!('donorNote' in data) || (data.donorNote is string && data.donorNote.size() <= 240)) &&
+        (!('totalDonationsCount' in data) || (data.totalDonationsCount is int && data.totalDonationsCount >= 0 && data.totalDonationsCount <= 500)) &&
+        (!('totalVolumeMl' in data) || (data.totalVolumeMl is int && data.totalVolumeMl >= 0 && data.totalVolumeMl <= 250000)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDonorPrivate(data) {
+      return data.keys().hasAll(['uid', 'phoneNumber', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'phoneNumber', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        isValidBdPhone(data.phoneNumber) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDonationRecord(data) {
+      return data.keys().hasAll([
+          'id', 'donorUid', 'donorName', 'bloodGroup', 'donationDate',
+          'hospitalOrCenter', 'divisionId', 'districtId', 'upazilaId',
+          'volumeMl', 'units', 'donationType', 'recipientSummary',
+          'linkedRequestId', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'donorUid', 'donorName', 'bloodGroup', 'donationDate',
+          'hospitalOrCenter', 'divisionId', 'districtId', 'upazilaId',
+          'volumeMl', 'units', 'donationType', 'recipientSummary',
+          'linkedRequestId', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.donorUid) &&
+        data.donorName is string && data.donorName.size() >= 2 && data.donorName.size() <= 80 &&
+        isValidBloodGroup(data.bloodGroup) &&
+        data.donationDate is string && data.donationDate.size() == 10 && data.donationDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.hospitalOrCenter is string && data.hospitalOrCenter.size() >= 2 && data.hospitalOrCenter.size() <= 120 &&
+        isValidSlug(data.divisionId, 40) &&
+        isValidSlug(data.districtId, 40) &&
+        isValidSlug(data.upazilaId, 50) &&
+        data.volumeMl is int && data.volumeMl >= 150 && data.volumeMl <= 1500 &&
+        data.units is int && data.units >= 1 && data.units <= 4 &&
+        data.donationType is string && data.donationType in ['whole_blood', 'platelet', 'plasma'] &&
+        data.recipientSummary is string && data.recipientSummary.size() <= 240 &&
+        data.linkedRequestId is string && data.linkedRequestId.size() <= 128 &&
+        (data.linkedRequestId == '' || isValidId(data.linkedRequestId)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidContactAccessLog(data) {
+      return data.keys().hasAll([
+          'callerUid', 'donorUid', 'requestedMethod',
+          'accessCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'callerUid', 'donorUid', 'requestedMethod',
+          'accessCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.callerUid == request.auth.uid &&
+        isValidId(data.callerUid) &&
+        isValidId(data.donorUid) &&
+        data.requestedMethod is string && data.requestedMethod in ['call', 'sms', 'whatsapp', 'imo'] &&
+        data.accessCount is int && data.accessCount >= 1 && data.accessCount <= 1000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBloodRequest(data) {
+      return data.keys().hasAll([
+          'id', 'createdBy', 'requesterName', 'bloodGroup', 'units',
+          'divisionId', 'districtId', 'upazilaId', 'hospitalName', 'urgency',
+          'requiredDate', 'patientNote', 'contactMethods', 'hasConsented',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'createdBy', 'requesterName', 'bloodGroup', 'units',
+          'divisionId', 'districtId', 'upazilaId', 'hospitalName', 'urgency',
+          'requiredDate', 'patientNote', 'contactMethods', 'hasConsented',
+          'status', 'bookedDonorUid', 'bookedDonorName', 'bookingNote',
+          'bookedAt', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.createdBy) &&
+        data.requesterName is string && data.requesterName.size() >= 2 && data.requesterName.size() <= 80 &&
+        isValidBloodGroup(data.bloodGroup) &&
+        data.units is int && data.units >= 1 && data.units <= 10 &&
+        isValidSlug(data.divisionId, 40) &&
+        isValidSlug(data.districtId, 40) &&
+        isValidSlug(data.upazilaId, 50) &&
+        data.hospitalName is string && data.hospitalName.size() >= 3 && data.hospitalName.size() <= 120 &&
+        data.urgency is string && data.urgency in ['emergency', 'urgent', 'scheduled'] &&
+        data.requiredDate is string && data.requiredDate.size() == 10 && data.requiredDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        data.patientNote is string && data.patientNote.size() <= 400 &&
+        isValidContactMethodsList(data.contactMethods, 1) &&
+        data.hasConsented is bool && data.hasConsented == true &&
+        data.status is string && data.status in ['open', 'booked', 'fulfilled', 'cancelled', 'expired', 'removed'] &&
+        (!('bookedDonorUid' in data) || (data.bookedDonorUid is string && data.bookedDonorUid.size() <= 128 && (data.bookedDonorUid == '' || isValidId(data.bookedDonorUid)))) &&
+        (!('bookedDonorName' in data) || (data.bookedDonorName is string && data.bookedDonorName.size() <= 80)) &&
+        (!('bookingNote' in data) || (data.bookingNote is string && data.bookingNote.size() <= 240)) &&
+        (!('bookedAt' in data) || data.bookedAt == null || data.bookedAt is timestamp) &&
+        (data.status != 'booked' || ('bookedDonorName' in data && data.bookedDonorName.size() >= 2)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidBloodRequestPrivate(data) {
+      return data.keys().hasAll(['requestId', 'createdBy', 'phoneNumber', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['requestId', 'createdBy', 'phoneNumber', 'createdAt', 'updatedAt']) &&
+        isValidId(data.requestId) &&
+        isValidId(data.createdBy) &&
+        isValidBdPhone(data.phoneNumber) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidRequestPledge(data) {
+      return data.keys().hasAll([
+          'id', 'requestId', 'requestCreatorUid', 'hospitalName',
+          'donorUid', 'donorName', 'donorBloodGroup', 'message',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'requestId', 'requestCreatorUid', 'hospitalName',
+          'donorUid', 'donorName', 'donorBloodGroup', 'message',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.requestId) &&
+        isValidId(data.requestCreatorUid) &&
+        data.hospitalName is string && data.hospitalName.size() >= 3 && data.hospitalName.size() <= 120 &&
+        isValidId(data.donorUid) &&
+        data.donorName is string && data.donorName.size() >= 2 && data.donorName.size() <= 80 &&
+        isValidBloodGroup(data.donorBloodGroup) &&
+        data.message is string && data.message.size() <= 240 &&
+        data.status is string && data.status in ['offered', 'accepted', 'declined', 'withdrawn'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll([
+          'id', 'reportedBy', 'targetType', 'targetId', 'targetUid',
+          'reason', 'description', 'status', 'reviewedBy', 'resolutionNote',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'reportedBy', 'targetType', 'targetId', 'targetUid',
+          'reason', 'description', 'status', 'reviewedBy', 'resolutionNote',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.reportedBy) &&
+        data.targetType is string && data.targetType in ['donor', 'blood_request'] &&
+        isValidId(data.targetId) &&
+        isValidId(data.targetUid) &&
+        data.reason is string && data.reason in [
+          'incorrect_phone', 'abusive_contact', 'fake_profile',
+          'spam', 'misleading_availability', 'other'
+        ] &&
+        data.description is string && data.description.size() <= 500 &&
+        data.status is string && data.status in ['open', 'reviewing', 'resolved', 'dismissed'] &&
+        data.reviewedBy is string && data.reviewedBy.size() <= 128 &&
+        data.resolutionNote is string && data.resolutionNote.size() <= 400 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRole(data) {
+      return data.keys().hasAll(['uid', 'role', 'grantedBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'role', 'grantedBy', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.role is string && data.role in ['admin', 'moderator'] &&
+        isValidId(data.grantedBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll([
+          'id', 'actorUid', 'actorEmail', 'action',
+          'targetType', 'targetId', 'reason', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'actorUid', 'actorEmail', 'action',
+          'targetType', 'targetId', 'reason', 'createdAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.actorUid == request.auth.uid &&
+        isValidId(data.actorUid) &&
+        data.actorEmail is string && data.actorEmail.size() >= 5 && data.actorEmail.size() <= 160 &&
+        data.action is string && data.action in [
+          'suspend_user', 'restore_user', 'unlist_donor', 'relist_donor',
+          'resolve_report', 'dismiss_report', 'review_report',
+          'remove_blood_request', 'reopen_blood_request',
+          'remove_donation_record', 'grant_moderator', 'revoke_moderator'
+        ] &&
+        data.targetType is string && data.targetType in [
+          'user', 'donor', 'report', 'blood_request', 'donation_record', 'admin_role'
+        ] &&
+        isValidId(data.targetId) &&
+        data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 400 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll([
+          'id', 'targetUid', 'type', 'titleBn', 'titleEn',
+          'messageBn', 'messageEn', 'targetView', 'urgency',
+          'read', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'targetUid', 'type', 'titleBn', 'titleEn',
+          'messageBn', 'messageEn', 'targetView', 'targetId',
+          'targetDonorUid', 'urgency', 'read', 'metadata',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.targetUid) &&
+        data.type is string && data.type in [
+          'pledge_received', 'donor_booked', 'pledge_accepted',
+          'moderator_granted', 'moderator_revoked', 'user_status_changed',
+          'emergency_alert', 'eligibility_reminder', 'system_update'
+        ] &&
+        data.titleBn is string && data.titleBn.size() >= 2 && data.titleBn.size() <= 140 &&
+        data.titleEn is string && data.titleEn.size() >= 2 && data.titleEn.size() <= 140 &&
+        data.messageBn is string && data.messageBn.size() >= 2 && data.messageBn.size() <= 600 &&
+        data.messageEn is string && data.messageEn.size() >= 2 && data.messageEn.size() <= 600 &&
+        data.targetView is string && data.targetView in [
+          'find_donors', 'blood_requests', 'how_it_works', 'safety',
+          'profile', 'admin', 'privacy', 'terms'
+        ] &&
+        (!('targetId' in data) || (data.targetId is string && data.targetId.size() <= 128)) &&
+        (!('targetDonorUid' in data) || (data.targetDonorUid is string && data.targetDonorUid.size() <= 128)) &&
+        data.urgency is string && data.urgency in ['emergency', 'urgent', 'info'] &&
+        data.read is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUsernameReservation(data, usernameLower) {
+      return data.keys().hasAll(['username', 'usernameLower', 'uid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['username', 'usernameLower', 'uid', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.username is string && data.username.size() >= 3 && data.username.size() <= 30 &&
+        data.username.matches('^[a-zA-Z0-9_]+$') &&
+        data.usernameLower is string && data.usernameLower == usernameLower &&
+        data.usernameLower.matches('^[a-z0-9_]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // Relational Lookup Helpers (Never called inside `allow list`)
+    // =========================================================================
+    function isDonorContactable(donorUid) {
+      return exists(/databases/$(database)/documents/donors/$(donorUid)) &&
+        get(/databases/$(database)/documents/donors/$(donorUid)).data.isListed == true &&
+        get(/databases/$(database)/documents/donors/$(donorUid)).data.accountStatus == 'active' &&
+        get(/databases/$(database)/documents/donors/$(donorUid)).data.hasConsented == true &&
+        get(/databases/$(database)/documents/donors/$(donorUid)).data.contactMethods.size() >= 1;
+    }
+
+    function isDonorMethodEnabled(donorUid, method) {
+      return isDonorContactable(donorUid) &&
+        method in get(/databases/$(database)/documents/donors/$(donorUid)).data.contactMethods;
+    }
+
+    function isBloodRequestContactable(requestId) {
+      return exists(/databases/$(database)/documents/bloodRequests/$(requestId)) &&
+        get(/databases/$(database)/documents/bloodRequests/$(requestId)).data.status == 'open' &&
+        get(/databases/$(database)/documents/bloodRequests/$(requestId)).data.hasConsented == true;
+    }
+
+    function reportTargetExists(targetType, targetId) {
+      return (targetType == 'donor' && exists(/databases/$(database)/documents/donors/$(targetId))) ||
+        (targetType == 'blood_request' && exists(/databases/$(database)/documents/bloodRequests/$(targetId)));
+    }
+
+    function isCallerPrefixLogId(logId) {
+      return logId.size() > request.auth.uid.size() + 1 &&
+        logId[0:request.auth.uid.size() + 1] == request.auth.uid + '_';
+    }
+
+    function isCallerSuffixPledgeId(pledgeId) {
+      return pledgeId.size() > request.auth.uid.size() + 1 &&
+        pledgeId[pledgeId.size() - request.auth.uid.size() - 1 : pledgeId.size()] == '_' + request.auth.uid;
+    }
+
+    // =========================================================================
+    // 1. Users Collection (/users/{uid}) — Strict PII Protection
+    // =========================================================================
+    match /users/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isVerifiedEmail() && isAdmin();
+
+      allow create: if isVerifiedEmail() &&
+        isOwner(uid) &&
+        isValidId(uid) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().accountStatus == 'active' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(uid) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['accountStatus', 'updatedAt'])) ||
+          (isOwner(uid) && existing().accountStatus == 'active' && (
+            (incoming().accountStatus == 'active' && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'username', 'usernameLower', 'preferredLanguage', 'updatedAt'])) ||
+            (incoming().accountStatus == 'deactivated' && incoming().diff(existing()).affectedKeys().hasOnly(['accountStatus', 'updatedAt']))
+          ))
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 2. Donors Collection (/donors/{uid}) — Safe Public Directory Fields Only
+    // =========================================================================
+    match /donors/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (
+        isOwner(uid) ||
+        isAdmin() ||
+        (isVerifiedEmail() && resource != null && existing().isListed == true && existing().accountStatus == 'active')
+      );
+
+      allow list: if isVerifiedEmail() && (
+        isAdmin() ||
+        (existing().isListed == true && existing().accountStatus == 'active')
+      );
+
+      allow create: if isVerifiedEmail() &&
+        isOwner(uid) &&
+        isValidId(uid) &&
+        isValidDonorProfile(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().accountStatus == 'active' &&
+        incoming().emailVerified == true &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        incoming().lastAvailabilityUpdatedAt == request.time &&
+        incoming().contactConsentAt == request.time &&
+        isCallerActiveUser() &&
+        (!incoming().isListed || existsAfter(/databases/$(database)/documents/donorPrivate/$(uid)));
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(uid) &&
+        isValidDonorProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['isListed', 'accountStatus', 'updatedAt'])) ||
+          (isOwner(uid) && existing().accountStatus == 'active' && incoming().accountStatus == 'active' && incoming().emailVerified == true && isCallerActiveUser() && (
+            // Action 1: Quick Availability Toggle
+            (incoming().lastAvailabilityUpdatedAt == request.time &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['availability', 'lastAvailabilityUpdatedAt', 'updatedAt'])) ||
+            // Action 2: Donation History Aggregate Sync
+            ((incoming().lastAvailabilityUpdatedAt == existing().lastAvailabilityUpdatedAt || incoming().lastAvailabilityUpdatedAt == request.time) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'lastDonationDate', 'totalDonationsCount', 'totalVolumeMl',
+                'availability', 'lastAvailabilityUpdatedAt', 'updatedAt'
+              ])) ||
+            // Action 3: Full Donor Profile / Listing / Extended Details Update
+            ((!incoming().isListed || existsAfter(/databases/$(database)/documents/donorPrivate/$(uid))) &&
+              (incoming().lastAvailabilityUpdatedAt == existing().lastAvailabilityUpdatedAt || incoming().lastAvailabilityUpdatedAt == request.time) &&
+              (incoming().contactConsentAt == existing().contactConsentAt || incoming().contactConsentAt == request.time) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'displayName', 'username', 'bloodGroup', 'divisionId', 'districtId', 'upazilaId',
+                'availability', 'lastAvailabilityUpdatedAt', 'contactMethods',
+                'hasConsented', 'contactConsentAt', 'isListed', 'emailVerified',
+                'lastDonationDate', 'gender', 'ageYears', 'weightKg',
+                'donationPreference', 'nightCallPreference', 'occupation',
+                'preferredHospitalArea', 'donorNote', 'totalDonationsCount',
+                'totalVolumeMl', 'updatedAt'
+              ]))
+          )) ||
+          // Action 4: Owner Account Deactivation Sync
+          (isOwner(uid) && incoming().isListed == false && incoming().accountStatus == 'deactivated' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['isListed', 'accountStatus', 'updatedAt']))
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 3. Donor Private Contact (/donorPrivate/{uid}) — Isolated Phone PII
+    // =========================================================================
+    match /donorPrivate/{uid} {
+      allow get: if isVerifiedEmail() && isValidId(uid) && (
+        isOwner(uid) ||
+        isAdmin() ||
+        (
+          resource != null &&
+          isCallerActiveUser() &&
+          isDonorContactable(uid) &&
+          exists(/databases/$(database)/documents/contactAccessLogs/$(request.auth.uid + '_' + uid))
+        )
+      );
+
+      allow list: if false;
+
+      allow create: if isVerifiedEmail() &&
+        isOwner(uid) &&
+        isValidId(uid) &&
+        isValidDonorPrivate(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser();
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(uid) &&
+        isValidDonorPrivate(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'updatedAt'])) ||
+          (isOwner(uid) && isCallerActiveUser() && incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'updatedAt']))
+        );
+
+      allow delete: if isVerifiedEmail() && isValidId(uid) && (isOwner(uid) || isAdmin());
+    }
+
+    // =========================================================================
+    // 4. Donation Records (/donationRecords/{recordId}) — Donor History Log
+    // =========================================================================
+    match /donationRecords/{recordId} {
+      allow get: if isVerifiedEmail() && isValidId(recordId) && (
+        isAdmin() ||
+        (resource != null && existing().donorUid == request.auth.uid)
+      );
+
+      allow list: if isVerifiedEmail() && (
+        isBootstrappedAdmin() ||
+        existing().donorUid == request.auth.uid
+      );
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(recordId) &&
+        isValidDonationRecord(incoming()) &&
+        incoming().id == recordId &&
+        incoming().donorUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser();
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(recordId) &&
+        isValidDonationRecord(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().donorUid == existing().donorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isOwner(existing().donorUid) &&
+        isCallerActiveUser() &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'donorName', 'bloodGroup', 'donationDate', 'hospitalOrCenter',
+          'divisionId', 'districtId', 'upazilaId', 'volumeMl', 'units',
+          'donationType', 'recipientSummary', 'linkedRequestId', 'updatedAt'
+        ]);
+
+      allow delete: if isVerifiedEmail() && isValidId(recordId) && (
+        isAdmin() ||
+        (resource != null && existing().donorUid == request.auth.uid && isCallerActiveUser())
+      );
+    }
+
+    // =========================================================================
+    // 5. Contact Access Logs (/contactAccessLogs/{logId}) — Audit Trail
+    // =========================================================================
+    match /contactAccessLogs/{logId} {
+      allow get: if isVerifiedEmail() && isValidId(logId) && (
+        isAdmin() ||
+        (resource == null && isCallerPrefixLogId(logId)) ||
+        (resource != null && existing().callerUid == request.auth.uid)
+      );
+
+      allow list: if isVerifiedEmail() && (
+        isBootstrappedAdmin() ||
+        existing().callerUid == request.auth.uid
+      );
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(logId) &&
+        isValidContactAccessLog(incoming()) &&
+        logId == request.auth.uid + '_' + incoming().donorUid &&
+        incoming().callerUid != incoming().donorUid &&
+        incoming().accessCount == 1 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser() &&
+        isDonorMethodEnabled(incoming().donorUid, incoming().requestedMethod);
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(logId) &&
+        isValidContactAccessLog(incoming()) &&
+        incoming().callerUid == existing().callerUid &&
+        incoming().donorUid == existing().donorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().accessCount == existing().accessCount + 1 &&
+        isCallerActiveUser() &&
+        isDonorMethodEnabled(existing().donorUid, incoming().requestedMethod) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['requestedMethod', 'accessCount', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 6. Blood Requests (/bloodRequests/{requestId}) — Public-Safe Requests
+    // =========================================================================
+    match /bloodRequests/{requestId} {
+      allow get: if isVerifiedEmail() && isValidId(requestId) && (
+        isAdmin() ||
+        (resource != null && (existing().createdBy == request.auth.uid || existing().status in ['open', 'booked']))
+      );
+
+      allow list: if isVerifiedEmail() && (
+        isAdmin() ||
+        existing().createdBy == request.auth.uid ||
+        existing().status in ['open', 'booked']
+      );
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(requestId) &&
+        isValidBloodRequest(incoming()) &&
+        incoming().id == requestId &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().status == 'open' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser() &&
+        existsAfter(/databases/$(database)/documents/bloodRequestPrivate/$(requestId));
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(requestId) &&
+        isValidBloodRequest(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Admin moderation override (remove spam or reopen abused booking)
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'bookedDonorUid', 'bookedDonorName', 'bookingNote', 'bookedAt', 'updatedAt'
+          ])) ||
+          // Owner transitions while non-terminal ('open' or 'booked')
+          (existing().createdBy == request.auth.uid && existing().status in ['open', 'booked'] && isCallerActiveUser() && (
+            // Action 1: Book Donor & Lock Calls ('open' or 'booked' -> 'booked')
+            (incoming().status == 'booked' &&
+              incoming().bookedAt == request.time &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'bookedDonorUid', 'bookedDonorName', 'bookingNote', 'bookedAt', 'updatedAt'
+              ])) ||
+            // Action 2: Unbook & Reopen Calls ('booked' -> 'open')
+            (existing().status == 'booked' &&
+              incoming().status == 'open' &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'bookedDonorUid', 'bookedDonorName', 'bookingNote', 'bookedAt', 'updatedAt'
+              ])) ||
+            // Action 3: Close request ('fulfilled' / 'cancelled')
+            (incoming().status in ['fulfilled', 'cancelled'] &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+            // Action 4: Edit open request details
+            (existing().status == 'open' && incoming().status == 'open' &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'requesterName', 'bloodGroup', 'units', 'divisionId', 'districtId',
+                'upazilaId', 'hospitalName', 'urgency', 'requiredDate',
+                'patientNote', 'contactMethods', 'updatedAt'
+              ]))
+          ))
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 7. Blood Request Private Contact (/bloodRequestPrivate/{requestId})
+    //    Locked automatically when bloodRequests/{requestId}.status == 'booked'!
+    // =========================================================================
+    match /bloodRequestPrivate/{requestId} {
+      allow get: if isVerifiedEmail() && isValidId(requestId) && (
+        isAdmin() ||
+        (resource != null && (
+          existing().createdBy == request.auth.uid ||
+          (isCallerActiveUser() && isBloodRequestContactable(requestId))
+        ))
+      );
+
+      allow list: if false;
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(requestId) &&
+        isValidBloodRequestPrivate(incoming()) &&
+        incoming().requestId == requestId &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser();
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(requestId) &&
+        isValidBloodRequestPrivate(incoming()) &&
+        incoming().requestId == existing().requestId &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'updatedAt'])) ||
+          (existing().createdBy == request.auth.uid && isCallerActiveUser() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['phoneNumber', 'updatedAt']))
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 8. Request Pledges (/requestPledges/{pledgeId}) — Donor Offers to Donate
+    // =========================================================================
+    match /requestPledges/{pledgeId} {
+      allow get: if isVerifiedEmail() && isValidId(pledgeId) && (
+        isAdmin() ||
+        (resource == null && isCallerSuffixPledgeId(pledgeId)) ||
+        (resource != null && (
+          existing().donorUid == request.auth.uid ||
+          existing().requestCreatorUid == request.auth.uid
+        ))
+      );
+
+      allow list: if isVerifiedEmail() && (
+        isAdmin() ||
+        existing().donorUid == request.auth.uid ||
+        existing().requestCreatorUid == request.auth.uid
+      );
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(pledgeId) &&
+        isValidRequestPledge(incoming()) &&
+        incoming().id == pledgeId &&
+        pledgeId == incoming().requestId + '_' + request.auth.uid &&
+        incoming().donorUid == request.auth.uid &&
+        incoming().donorUid != incoming().requestCreatorUid &&
+        incoming().status == 'offered' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser() &&
+        exists(/databases/$(database)/documents/bloodRequests/$(incoming().requestId)) &&
+        get(/databases/$(database)/documents/bloodRequests/$(incoming().requestId)).data.status == 'open' &&
+        get(/databases/$(database)/documents/bloodRequests/$(incoming().requestId)).data.createdBy == incoming().requestCreatorUid;
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(pledgeId) &&
+        isValidRequestPledge(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().requestId == existing().requestId &&
+        incoming().requestCreatorUid == existing().requestCreatorUid &&
+        incoming().hospitalName == existing().hospitalName &&
+        incoming().donorUid == existing().donorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+          (existing().requestCreatorUid == request.auth.uid && isCallerActiveUser() &&
+            incoming().status in ['accepted', 'declined', 'offered'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+          (existing().donorUid == request.auth.uid && isCallerActiveUser() &&
+            incoming().status in ['offered', 'withdrawn'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'donorName', 'donorBloodGroup', 'message', 'status', 'updatedAt'
+            ]))
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 9. Reports (/reports/{reportId}) — Abuse & Inaccurate Info Moderation
+    // =========================================================================
+    match /reports/{reportId} {
+      allow get: if isVerifiedEmail() && isValidId(reportId) && (
+        isAdmin() ||
+        (resource != null && existing().reportedBy == request.auth.uid)
+      );
+
+      allow list: if isVerifiedEmail() && (
+        isAdmin() ||
+        existing().reportedBy == request.auth.uid
+      );
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        incoming().id == reportId &&
+        incoming().reportedBy == request.auth.uid &&
+        incoming().targetUid != request.auth.uid &&
+        incoming().status == 'open' &&
+        incoming().reviewedBy == '' &&
+        incoming().resolutionNote == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser() &&
+        reportTargetExists(incoming().targetType, incoming().targetId);
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        isAdmin() &&
+        incoming().id == existing().id &&
+        incoming().reportedBy == existing().reportedBy &&
+        incoming().targetType == existing().targetType &&
+        incoming().targetId == existing().targetId &&
+        incoming().targetUid == existing().targetUid &&
+        incoming().reason == existing().reason &&
+        incoming().description == existing().description &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().reviewedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'resolutionNote', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 10. Admin Roles (/adminRoles/{uid}) — Server / Super-Admin Controlled
+    // =========================================================================
+    match /adminRoles/{uid} {
+      allow get: if isVerifiedEmail() && isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isBootstrappedAdmin() &&
+        isValidId(uid) &&
+        isValidAdminRole(incoming()) &&
+        incoming().uid == uid &&
+        incoming().grantedBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(uid));
+
+      allow update: if isBootstrappedAdmin() &&
+        isValidId(uid) &&
+        isValidAdminRole(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().grantedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role', 'grantedBy', 'updatedAt']);
+
+      allow delete: if isBootstrappedAdmin() && isValidId(uid);
+    }
+
+    // =========================================================================
+    // 11. Audit Logs (/auditLogs/{logId}) — Append-Only Privileged Trail
+    // =========================================================================
+    match /auditLogs/{logId} {
+      allow get: if isVerifiedEmail() && isValidId(logId) && isAdmin();
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(logId) &&
+        isAdmin() &&
+        isValidAuditLog(incoming()) &&
+        incoming().id == logId &&
+        incoming().actorUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // 12. Notifications (/notifications/{notificationId}) — Real-Time User Alerts
+    // =========================================================================
+    match /notifications/{notificationId} {
+      allow get: if isVerifiedEmail() && isValidId(notificationId) && (
+        isAdmin() ||
+        (resource != null && existing().targetUid == request.auth.uid)
+      );
+
+      // Cost-Optimization Clause: Purely relational against existing().targetUid with NO get() or exists()
+      allow list: if isVerifiedEmail() && (
+        isBootstrappedAdmin() ||
+        existing().targetUid == request.auth.uid
+      );
+
+      allow create: if isVerifiedEmail() &&
+        isValidId(notificationId) &&
+        isValidNotification(incoming()) &&
+        incoming().id == notificationId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isCallerActiveUser();
+
+      allow update: if isVerifiedEmail() &&
+        isValidId(notificationId) &&
+        isValidNotification(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().targetUid == existing().targetUid &&
+        incoming().type == existing().type &&
+        incoming().titleBn == existing().titleBn &&
+        incoming().titleEn == existing().titleEn &&
+        incoming().messageBn == existing().messageBn &&
+        incoming().messageEn == existing().messageEn &&
+        incoming().targetView == existing().targetView &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (existing().targetUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])) ||
+          (isAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']))
+        );
+
+      allow delete: if isVerifiedEmail() && isValidId(notificationId) && (
+        isAdmin() ||
+        (resource != null && existing().targetUid == request.auth.uid)
+      );
+    }
+
+    // =========================================================================
+    // 13. Usernames Collection (/usernames/{usernameLower}) — Global Unique Registry
+    // =========================================================================
+    match /usernames/{usernameLower} {
+      allow get: if isSignedIn();
+      allow list: if isVerifiedEmail() && isAdmin();
+
+      allow create: if isVerifiedEmail() &&
+        usernameLower is string &&
+        usernameLower.size() >= 3 &&
+        usernameLower.size() <= 30 &&
+        usernameLower.matches('^[a-z0-9_]+$') &&
+        isValidUsernameReservation(incoming(), usernameLower) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedEmail() &&
+        usernameLower is string &&
+        usernameLower.size() >= 3 &&
+        usernameLower.size() <= 30 &&
+        isValidUsernameReservation(incoming(), usernameLower) &&
+        incoming().uid == existing().uid &&
+        incoming().uid == request.auth.uid &&
+        incoming().usernameLower == existing().usernameLower &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedEmail() &&
+        (existing().uid == request.auth.uid || isAdmin());
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "রক্তদেই (Rokto Dei)",
+  "description": "বাংলাদেশে রক্তপ্রার্থী ও স্বেচ্ছায় রক্তদাতাদের মধ্যে দ্রুত ও নিরাপদ যোগাযোগের প্ল্যাটফর্ম (Blood Donor Finder & Connection Platform).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
