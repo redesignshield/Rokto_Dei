@@ -20,6 +20,15 @@ on:
         description: 'Android Launcher App Name'
         required: false
         default: 'Rokto Dei'
+      publish_release:
+        description: 'Publish Public GitHub Release automatically (creates tag v<version> & attaches APK)'
+        required: false
+        type: boolean
+        default: false
+      release_notes:
+        description: 'Optional release notes shown to users in update popup'
+        required: false
+        default: ''
 
 jobs:
   verify:
@@ -236,7 +245,7 @@ jobs:
           ALIAS_PASS="${KEY_PASS:-$STORE_PASS}"
 
           if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 --decode > android.keystore
+            printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode > android.keystore
           else
             keytool -genkeypair -v \
               -keystore android.keystore \
@@ -272,9 +281,9 @@ jobs:
             cap-build/RoktoDei-v*.apk.sha256
 
   publish-github-release:
-    name: Publish GitHub Release (on Tag Push v*)
+    name: Publish GitHub Release (Tag Push or 1-Click)
     needs: build-capacitor-apk
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.app_url == '')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -287,11 +296,17 @@ jobs:
 
       - name: Compose Release Body with SHA-256 Checksum
         id: compose_body
+        env:
+          CUSTOM_NOTES: ${{ inputs.release_notes || '' }}
         run: |
           SHA_VAL="$(awk '{print $1}' release-assets/RoktoDei-v*.apk.sha256 | head -n 1)"
           {
             echo "BODY<<EOF"
             echo "## Rokto Dei v${{ needs.build-capacitor-apk.outputs.app_version }}"
+            if [ -n "$CUSTOM_NOTES" ]; then
+              echo ""
+              echo "$CUSTOM_NOTES"
+            fi
             echo ""
             echo "### Android APK Integrity Verification"
             echo "SHA-256: \`$SHA_VAL\`"
@@ -301,6 +316,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', needs.build-capacitor-apk.outputs.app_version) }}
+          name: Rokto Dei v${{ needs.build-capacitor-apk.outputs.app_version }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           body: ${{ env.BODY }}
           files: |
