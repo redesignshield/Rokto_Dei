@@ -18,6 +18,11 @@ import { AppUpdateModal } from './components/AppUpdateModal';
 import { LaunchAndOnboardingOverlay } from './components/LaunchAndOnboardingOverlay';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { ViewSkeletonLoader } from './components/ViewSkeletonLoader';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
+import {
+  ApkGoogleAuthBridge,
+  getApkGoogleAuthBridgeParams,
+} from './components/ApkGoogleAuthBridge';
 import type { AppView } from './types';
 
 // Code-split secondary heavy views so initial page load is ultra-fast
@@ -408,13 +413,25 @@ function AppShell() {
 }
 
 export default function App() {
+  const { isBridge } = getApkGoogleAuthBridgeParams();
+
+  if (isBridge) {
+    return (
+      <AppErrorBoundary variant="app" lang="bn">
+        <ApkGoogleAuthBridge />
+      </AppErrorBoundary>
+    );
+  }
+
   return (
-    <AuthProvider>
-      <NotificationProvider>
-        <UpdateProvider>
-          <AppShell />
-        </UpdateProvider>
-      </NotificationProvider>
-    </AuthProvider>
+    <AppErrorBoundary variant="app" lang="bn">
+      <AuthProvider>
+        <NotificationProvider>
+          <UpdateProvider>
+            <AppShell />
+          </UpdateProvider>
+        </NotificationProvider>
+      </AuthProvider>
+    </AppErrorBoundary>
   );
 }

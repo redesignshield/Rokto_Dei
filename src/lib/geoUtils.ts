@@ -246,3 +246,23 @@ export function formatDistanceKm(distanceKm: number, lang: 'bn' | 'en'): string 
   }
   return `${distanceKm.toFixed(1)} km away`;
 }
+
+export function findNearestDistrictId(coords: GeoCoordinate): string | null {
+  let bestId: string | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const [districtId, center] of Object.entries(
+    BANGLADESH_DISTRICT_COORDINATES
+  )) {
+    const dist = haversineDistance(
+      coords.lat,
+      coords.lng,
+      center.lat,
+      center.lng
+    );
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestId = districtId;
+    }
+  }
+  return bestId;
+}

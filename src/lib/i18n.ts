@@ -15,7 +15,7 @@ import type {
 } from '../types';
 
 export function availabilityLabel(
-  status: AvailabilityStatus,
+  status: AvailabilityStatus | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<AvailabilityStatus, { bn: string; en: string }> = {
@@ -32,11 +32,14 @@ export function availabilityLabel(
       en: 'Not Specified',
     },
   };
-  return labels[status][lang];
+  return (
+    (status ? labels[status as AvailabilityStatus]?.[lang] : undefined) ||
+    labels.not_specified[lang]
+  );
 }
 
 export function contactMethodLabel(
-  method: ContactMethod,
+  method: ContactMethod | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<ContactMethod, { bn: string; en: string }> = {
@@ -45,21 +48,30 @@ export function contactMethodLabel(
     whatsapp: { bn: 'WhatsApp', en: 'WhatsApp' },
     imo: { bn: 'IMO', en: 'IMO' },
   };
-  return labels[method][lang];
+  return (
+    (method ? labels[method as ContactMethod]?.[lang] : undefined) ||
+    (lang === 'bn' ? 'যোগাযোগ' : 'Contact')
+  );
 }
 
-export function genderLabel(gender: DonorGender, lang: AppLanguage): string {
+export function genderLabel(
+  gender: DonorGender | string | null | undefined,
+  lang: AppLanguage
+): string {
   const labels: Record<DonorGender, { bn: string; en: string }> = {
     male: { bn: 'পুরুষ', en: 'Male' },
     female: { bn: 'নারী', en: 'Female' },
     other: { bn: 'অন্যান্য', en: 'Other' },
     not_specified: { bn: 'উল্লেখ নেই', en: 'Prefer not to say' },
   };
-  return labels[gender][lang];
+  return (
+    (gender ? labels[gender as DonorGender]?.[lang] : undefined) ||
+    labels.not_specified[lang]
+  );
 }
 
 export function donationPreferenceLabel(
-  pref: DonorDonationPreference,
+  pref: DonorDonationPreference | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<DonorDonationPreference, { bn: string; en: string }> = {
@@ -67,11 +79,14 @@ export function donationPreferenceLabel(
     platelet: { bn: 'প্লাটিলেট (Platelet)', en: 'Platelet' },
     both: { bn: 'হোল ব্লাড ও প্লাটিলেট উভয়ই', en: 'Whole Blood & Platelet' },
   };
-  return labels[pref][lang];
+  return (
+    (pref ? labels[pref as DonorDonationPreference]?.[lang] : undefined) ||
+    labels.whole_blood[lang]
+  );
 }
 
 export function donationComponentLabel(
-  comp: DonationComponentType,
+  comp: DonationComponentType | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<DonationComponentType, { bn: string; en: string }> = {
@@ -79,11 +94,14 @@ export function donationComponentLabel(
     platelet: { bn: 'প্লাটিলেট', en: 'Platelet' },
     plasma: { bn: 'প্লাজমা', en: 'Plasma' },
   };
-  return labels[comp][lang];
+  return (
+    (comp ? labels[comp as DonationComponentType]?.[lang] : undefined) ||
+    labels.whole_blood[lang]
+  );
 }
 
 export function nightCallPreferenceLabel(
-  pref: NightCallPreference,
+  pref: NightCallPreference | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<NightCallPreference, { bn: string; en: string }> = {
@@ -100,11 +118,14 @@ export function nightCallPreferenceLabel(
       en: 'Send SMS / WhatsApp before calling',
     },
   };
-  return labels[pref][lang];
+  return (
+    (pref ? labels[pref as NightCallPreference]?.[lang] : undefined) ||
+    labels.anytime[lang]
+  );
 }
 
 export function urgencyLabel(
-  urgency: BloodRequestUrgency,
+  urgency: BloodRequestUrgency | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<BloodRequestUrgency, { bn: string; en: string }> = {
@@ -112,11 +133,14 @@ export function urgencyLabel(
     urgent: { bn: 'জরুরি (২৪–৪৮ ঘণ্টা)', en: 'Urgent (24–48h)' },
     scheduled: { bn: 'নির্ধারিত তারিখ', en: 'Scheduled' },
   };
-  return labels[urgency][lang];
+  return (
+    (urgency ? labels[urgency as BloodRequestUrgency]?.[lang] : undefined) ||
+    labels.urgent[lang]
+  );
 }
 
 export function requestStatusLabel(
-  status: BloodRequestStatus,
+  status: BloodRequestStatus | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<BloodRequestStatus, { bn: string; en: string }> = {
@@ -130,11 +154,14 @@ export function requestStatusLabel(
     expired: { bn: 'মেয়াদোত্তীর্ণ', en: 'Expired' },
     removed: { bn: 'অপসারিত (মডারেশন)', en: 'Removed' },
   };
-  return labels[status][lang];
+  return (
+    (status ? labels[status as BloodRequestStatus]?.[lang] : undefined) ||
+    labels.open[lang]
+  );
 }
 
 export function pledgeStatusLabel(
-  status: PledgeStatus,
+  status: PledgeStatus | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<PledgeStatus, { bn: string; en: string }> = {
@@ -143,11 +170,14 @@ export function pledgeStatusLabel(
     declined: { bn: 'অন্য ডোনার চূড়ান্ত', en: 'Declined' },
     withdrawn: { bn: 'প্রত্যাহারকৃত', en: 'Withdrawn' },
   };
-  return labels[status][lang];
+  return (
+    (status ? labels[status as PledgeStatus]?.[lang] : undefined) ||
+    labels.offered[lang]
+  );
 }
 
 export function reportReasonLabel(
-  reason: ReportReason,
+  reason: ReportReason | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<ReportReason, { bn: string; en: string }> = {
@@ -161,11 +191,14 @@ export function reportReasonLabel(
     },
     other: { bn: 'অন্যান্য', en: 'Other' },
   };
-  return labels[reason][lang];
+  return (
+    (reason ? labels[reason as ReportReason]?.[lang] : undefined) ||
+    labels.other[lang]
+  );
 }
 
 export function reportStatusLabel(
-  status: ReportStatus,
+  status: ReportStatus | string | null | undefined,
   lang: AppLanguage
 ): string {
   const labels: Record<ReportStatus, { bn: string; en: string }> = {
@@ -174,7 +207,10 @@ export function reportStatusLabel(
     resolved: { bn: 'সমাধানকৃত', en: 'Resolved' },
     dismissed: { bn: 'খারিজকৃত', en: 'Dismissed' },
   };
-  return labels[status][lang];
+  return (
+    (status ? labels[status as ReportStatus]?.[lang] : undefined) ||
+    labels.open[lang]
+  );
 }
 
 export function formatTimestamp(
@@ -184,10 +220,21 @@ export function formatTimestamp(
   if (!ts || typeof ts.toDate !== 'function') {
     return lang === 'bn' ? 'সদ্য আপডেটকৃত' : 'Just updated';
   }
-  const date = ts.toDate();
-  return new Intl.DateTimeFormat(lang === 'bn' ? 'bn-BD' : 'en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(date);
+  try {
+    const date = ts.toDate();
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+      return lang === 'bn' ? 'সদ্য আপডেটকৃত' : 'Just updated';
+    }
+    return new Intl.DateTimeFormat(lang === 'bn' ? 'bn-BD' : 'en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }).format(date);
+  } catch {
+    try {
+      return ts.toDate().toISOString().slice(0, 10);
+    } catch {
+      return lang === 'bn' ? 'সদ্য আপডেটকৃত' : 'Just updated';
+    }
+  }
 }

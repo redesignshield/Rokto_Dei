@@ -18,6 +18,9 @@ function shouldBypassLaunchOverlay(): boolean {
   if (typeof window === 'undefined') return true;
   try {
     const params = new URLSearchParams(window.location.search);
+    if (params.get('apk_google_auth') === '1') {
+      return true;
+    }
     const mode = params.get('mode');
     if (mode === 'resetPassword' || mode === 'verifyEmail') {
       return true;

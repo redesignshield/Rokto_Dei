@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  DISTRICTS,
   DIVISIONS,
   formatLocationLabel,
   getDistrictsByDivision,
@@ -30,6 +31,7 @@ import {
   contactMethodLabel,
   formatTimestamp,
 } from '../lib/i18n';
+import { isNativeCapacitorShell } from '../lib/platform';
 import { BLOOD_GROUPS, daysSinceDate } from '../lib/validation';
 import {
   listOpenBloodRequests,
@@ -50,6 +52,7 @@ import { DonationCareIllustration } from './MedicalIllustrations';
 import { ReportModal } from './ReportModal';
 import { DonorMapComponent } from './DonorMapComponent';
 import {
+  findNearestDistrictId,
   formatDistanceKm,
   getAreaCoords,
   getObfuscatedDonorCoords,
@@ -63,8 +66,8 @@ interface DonorSearchViewProps {
   onNavigate: (view: AppView, targetId?: string, donorUid?: string) => void;
 }
 
-function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+function getInitials(name?: string | null): string {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return 'র';
   if (parts.length === 1) return Array.from(parts[0])[0] || 'র';
   return `${Array.from(parts[0])[0] || ''}${Array.from(parts[parts.length - 1])[0] || ''}`.toUpperCase();
@@ -168,6 +171,20 @@ export function DonorSearchView({
           (import.meta as { env?: Record<string, string | undefined> }).env
             ?.VITE_API_BASE_URL || ''
         ).replace(/\/$/, '');
+
+        if (isNativeCapacitorShell() && !apiBase) {
+          const nearestDistId = findNearestDistrictId(coords);
+          const distObj = DISTRICTS.find((d) => d.id === nearestDistId);
+          if (distObj) {
+            setUserAddress(
+              `${distObj[activeLang]}, ${
+                activeLang === 'bn' ? 'বাংলাদেশ (নিকটবর্তী এলাকা)' : 'Bangladesh (Approx.)'
+              }`
+            );
+          }
+          return;
+        }
+
         const res = await fetch(
           `${apiBase}/api/reverse-geocode?lat=${encodeURIComponent(
             coords.lat
@@ -176,6 +193,11 @@ export function DonorSearchView({
 
         if (res.status === 429) {
           window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+          return;
+        }
+
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
           return;
         }
 
@@ -493,7 +515,7 @@ export function DonorSearchView({
           d.upazilaId,
           'en'
         ).toLowerCase();
-        const name = d.displayName.toLowerCase();
+        const name = (d.displayName || '').toLowerCase();
         const hospital = (d.preferredHospitalArea || '').toLowerCase();
         return (
           name.includes(q) ||
@@ -537,7 +559,7 @@ export function DonorSearchView({
         if (distA !== distB) {
           return distA - distB;
         }
-        return rank[a.availability] - rank[b.availability];
+        return (rank[a.availability] ?? 2) - (rank[b.availability] ?? 2);
       });
     }
 
@@ -590,8 +612,8 @@ export function DonorSearchView({
         requestedMethod: method,
       });
       setContactModalData({
-        personName: donor.displayName,
-        bloodGroup: donor.bloodGroup,
+        personName: donor.displayName || 'রক্তদাতা',
+        bloodGroup: donor.bloodGroup || 'O+',
         selectedMethod: method,
         phoneNumber: resolved.phoneNumber,
         quota: resolved.quota,
@@ -1165,14 +1187,15 @@ export function DonorSearchView({
                               {initials}
                             </span>
                             <span className="text-[11px] font-mono font-extrabold text-[#C80828] mt-1">
-                              {donor.bloodGroup}
+                              {donor.bloodGroup || 'O+'}
                             </span>
                           </div>
 
                           <div className="min-w-0 space-y-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <h3 className="text-base font-bold text-neutral-900 truncate">
-                                {donor.displayName}
+                                {donor.displayName ||
+                                  (lang === 'bn' ? 'রক্তদাতা' : 'Donor')}
                               </h3>
                               {donor.username && (
                                 <span className="font-mono text-[11px] font-semibold text-[#C80828] bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
@@ -1308,7 +1331,11 @@ export function DonorSearchView({
 
                           {/* Contact Method Buttons */}
                           <div className="flex items-center gap-1.5">
-                            {donor.contactMethods.map((method) => {
+                            {(Array.isArray(donor.contactMethods) &&
+                            donor.contactMethods.length > 0
+                              ? donor.contactMethods
+                              : (['call'] as ContactMethod[])
+                            ).map((method) => {
                               const busy =
                                 resolvingDonorKey === `${donor.uid}:${method}`;
                               return (
@@ -1320,10 +1347,9 @@ export function DonorSearchView({
                                     handleContactAction(donor, method)
                                   }
                                   title={contactMethodLabel(method, lang)}
-                                  aria-label={`${donor.displayName} - ${contactMethodLabel(
-                                    method,
-                                    lang
-                                  )}`}
+                                  aria-label={`${
+                                    donor.displayName || 'রক্তদাতা'
+                                  } - ${contactMethodLabel(method, lang)}`}
                                   className="w-10 h-10 rounded-xl bg-[#FADCE2] hover:bg-[#C80828] text-[#C80828] hover:text-white disabled:opacity-50 transition-colors flex items-center justify-center shrink-0 cursor-pointer shadow-2xs"
                                 >
                                   {busy ? (

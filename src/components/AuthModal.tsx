@@ -8,7 +8,10 @@ import {
   MailCheck,
   X,
 } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import {
+  APK_GOOGLE_BRIDGE_UNAVAILABLE_CODE,
+  useAuth,
+} from '../contexts/AuthContext';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -47,6 +50,7 @@ export function AuthModal({
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [apkBridgeBlocked, setApkBridgeBlocked] = useState(false);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   // Recovery sub-flow state
@@ -125,6 +129,7 @@ export function AuthModal({
 
   const switchMode = (nextMode: AuthMode, keepMessages = false) => {
     setMode(nextMode);
+    setApkBridgeBlocked(false);
     if (!keepMessages) {
       setError(null);
       setInfoMessage(null);
@@ -137,6 +142,7 @@ export function AuthModal({
   };
 
   const handleClose = () => {
+    setApkBridgeBlocked(false);
     if (mode === 'confirm_reset') {
       onClearResetOobCode?.();
       setMode('login');
@@ -146,12 +152,20 @@ export function AuthModal({
 
   const handleGoogle = async () => {
     setError(null);
+    setApkBridgeBlocked(false);
     setInfoMessage(null);
     setSubmitting(true);
     try {
       await loginWithGoogle();
       onClose();
     } catch (err) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: string }).code)
+          : '';
+      if (code === APK_GOOGLE_BRIDGE_UNAVAILABLE_CODE) {
+        setApkBridgeBlocked(true);
+      }
       setError(err instanceof Error ? err.message : 'লগইন ব্যর্থ হয়েছে।');
     } finally {
       setSubmitting(false);
@@ -407,9 +421,20 @@ export function AuthModal({
               {error && (
                 <div
                   role="alert"
-                  className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed"
+                  className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800 leading-relaxed space-y-2.5"
                 >
-                  {error}
+                  <p>{error}</p>
+                  {apkBridgeBlocked && (
+                    <button
+                      type="button"
+                      onClick={() => switchMode('recovery')}
+                      className="w-full min-h-[38px] px-3 py-1.5 bg-[#C80828] hover:bg-[#A3051E] text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                    >
+                      {lang === 'bn'
+                        ? 'Google ইমেইলের পাসওয়ার্ড সেট করুন'
+                        : 'Set Password for Google Email'}
+                    </button>
+                  )}
                 </div>
               )}
 

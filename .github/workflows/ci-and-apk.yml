@@ -45,7 +45,7 @@ jobs:
 
       - name: Build Production PWA Bundle
         env:
-          VITE_API_BASE_URL: ${{ vars.APP_URL || '' }}
+          VITE_API_BASE_URL: ${{ github.event.inputs.app_url || vars.APP_URL || '' }}
           VITE_GITHUB_REPO: ${{ github.repository }}
         run: npm run build
 
@@ -120,7 +120,7 @@ jobs:
           }
           EOF
 
-          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/browser@6 @capacitor/app@6
 
           cat <<EOF > capacitor.config.json
           {
@@ -163,18 +163,40 @@ jobs:
             convert -size "$dims" xc:"#FAF8F9" \( "$SRC_MASKABLE" -resize 220x220 \) -gravity center -composite "$splash_file"
           done
 
+          PKG_ID="${{ inputs.package_id || 'com.roktodei.app' }}"
+          export PKG_ID
           node -e '
             const fs = require("fs");
             const p = "cap-build/android/app/src/main/AndroidManifest.xml";
             let xml = fs.readFileSync(p, "utf8");
+            const pkgId = process.env.PKG_ID || "com.roktodei.app";
             const perms = [
               "<uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\" />",
               "<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\" />"
             ].filter(line => !xml.includes(line)).join("\n    ");
             if (perms) {
               xml = xml.replace("<application", perms + "\n\n    <application");
-              fs.writeFileSync(p, xml);
             }
+
+            if (xml.includes("android:launchMode=\"singleTop\"")) {
+              xml = xml.replace("android:launchMode=\"singleTop\"", "android:launchMode=\"singleTask\"");
+            } else if (!xml.includes("android:launchMode=")) {
+              xml = xml.replace("<activity", "<activity android:launchMode=\"singleTask\"");
+            }
+
+            const deepLinkFilter =
+              "            <intent-filter>\n" +
+              "                <action android:name=\"android.intent.action.VIEW\" />\n" +
+              "                <category android:name=\"android.intent.category.DEFAULT\" />\n" +
+              "                <category android:name=\"android.intent.category.BROWSABLE\" />\n" +
+              "                <data android:scheme=\"" + pkgId + "\" android:host=\"auth\" />\n" +
+              "            </intent-filter>";
+
+            if (!xml.includes("android:host=\"auth\"")) {
+              xml = xml.replace("</activity>", deepLinkFilter + "\n        </activity>");
+            }
+
+            fs.writeFileSync(p, xml);
 
             const gradlePath = "cap-build/android/app/build.gradle";
             let gradle = fs.readFileSync(gradlePath, "utf8");

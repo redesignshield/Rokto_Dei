@@ -196,7 +196,7 @@ export function NotificationProvider({
       },
       (error) => {
         if (!isOfflineError(error)) {
-          handleFirestoreError(error, OperationType.LIST, 'notifications');
+          console.warn('Realtime notifications listener error:', error);
         } else {
           console.warn('Realtime notifications running in offline mode.');
         }

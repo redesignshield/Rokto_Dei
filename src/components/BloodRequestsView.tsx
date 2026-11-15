@@ -1274,7 +1274,10 @@ export function BloodRequestsView({
                         : 'Contact Requester Directly:'}
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                      {reqItem.contactMethods.map((method) => {
+                      {(Array.isArray(reqItem.contactMethods) && reqItem.contactMethods.length > 0
+                        ? reqItem.contactMethods
+                        : (['call'] as ContactMethod[])
+                      ).map((method) => {
                         const busy = resolvingKey === `${reqItem.id}:${method}`;
                         return (
                           <button

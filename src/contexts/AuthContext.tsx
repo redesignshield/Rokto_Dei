@@ -7,14 +7,18 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import {
   applyActionCode,
   confirmPasswordReset,
   createUserWithEmailAndPassword,
   getRedirectResult,
+  GoogleAuthProvider,
   onAuthStateChanged,
   sendEmailVerification,
   sendPasswordResetEmail,
+  signInWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
   signInWithRedirect,
@@ -36,12 +40,47 @@ import {
   getOwnDonorBundle,
 } from '../services/roktoService';
 import { isOfflineError } from '../lib/firestoreError';
+import { isNativeCapacitorShell } from '../lib/platform';
 import type {
   AdminRoleType,
   AppLanguage,
   DonorProfile,
   UserProfile,
 } from '../types';
+
+export const APK_GOOGLE_BRIDGE_UNAVAILABLE_CODE =
+  'APK_GOOGLE_BRIDGE_UNAVAILABLE';
+
+function resolveApkAuthBridgeOrigin(): string {
+  const raw = (
+    (import.meta as { env?: Record<string, string | undefined> }).env
+      ?.VITE_API_BASE_URL || ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:') return '';
+    if (/^(localhost|127\.0\.0\.1)$/i.test(parsed.hostname)) return '';
+    return parsed.origin;
+  } catch {
+    return '';
+  }
+}
+
+function generateAuthNonce(): string {
+  try {
+    if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+  } catch {
+    // Fallback below
+  }
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
 
 interface AuthContextValue {
   firebaseUser: User | null;
@@ -130,6 +169,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const syncInFlightRef = useRef<{
     uid: string;
     promise: Promise<void>;
+  } | null>(null);
+
+  const pendingApkGoogleAuthRef = useRef<{
+    nonce: string;
+    resolve: () => void;
+    reject: (err: Error) => void;
+    timeoutId: number;
   } | null>(null);
 
   const syncUserRecords = useCallback(async (user: User | null) => {
@@ -231,6 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((res) => {
         if (res?.user) {
           setFirebaseUser(res.user);
+          setVerificationTick((v) => v + 1);
           void syncUserRecords(res.user);
         }
       })
@@ -246,10 +293,211 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, [syncUserRecords]);
 
+  // Listen for Chrome Custom Tab OAuth deep-link callback inside Capacitor APK (com.roktodei.app://auth#...)
+  useEffect(() => {
+    if (!isNativeCapacitorShell()) return;
+
+    let cancelled = false;
+    const handles: Array<{ remove: () => Promise<void> }> = [];
+
+    const clearPending = () => {
+      const pending = pendingApkGoogleAuthRef.current;
+      if (pending) {
+        window.clearTimeout(pending.timeoutId);
+        pendingApkGoogleAuthRef.current = null;
+      }
+      return pending;
+    };
+
+    const setupListeners = async () => {
+      try {
+        const urlHandle = await CapacitorApp.addListener(
+          'appUrlOpen',
+          async ({ url }) => {
+            if (!url || !url.includes('://auth')) return;
+            await Browser.close().catch(() => {});
+
+            const hashIdx = url.indexOf('#');
+            const queryIdx = url.indexOf('?');
+            const rawParams =
+              hashIdx >= 0
+                ? url.slice(hashIdx + 1)
+                : queryIdx >= 0
+                ? url.slice(queryIdx + 1)
+                : '';
+            const params = new URLSearchParams(rawParams);
+            const idToken = params.get('id_token');
+            const accessToken = params.get('access_token');
+            const returnedNonce = params.get('nonce') || '';
+
+            const pending = clearPending();
+            if (pending && pending.nonce && returnedNonce !== pending.nonce) {
+              pending.reject(
+                new Error('নিরাপত্তা যাচাই ব্যর্থ হয়েছে। অনুগ্রহ করে আবার Google লগইন করুন।')
+              );
+              return;
+            }
+
+            if (!idToken && !accessToken) {
+              pending?.reject(
+                new Error('Google লগইন টোকেন পাওয়া যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।')
+              );
+              return;
+            }
+
+            try {
+              const credential = GoogleAuthProvider.credential(
+                idToken || null,
+                accessToken || null
+              );
+              const cred = await signInWithCredential(auth, credential);
+              setFirebaseUser(cred.user);
+              setVerificationTick((v) => v + 1);
+              void syncUserRecords(cred.user);
+              pending?.resolve();
+            } catch (err) {
+              pending?.reject(new Error(formatFirebaseAuthError(err)));
+            }
+          }
+        );
+        if (cancelled) {
+          void urlHandle.remove();
+        } else {
+          handles.push(urlHandle);
+        }
+
+        const browserHandle = await Browser.addListener(
+          'browserFinished',
+          () => {
+            window.setTimeout(() => {
+              const pending = pendingApkGoogleAuthRef.current;
+              if (pending) {
+                clearPending();
+                pending.reject(
+                  new Error('Google লগইন সম্পন্ন করার আগেই ব্রাউজার বন্ধ করা হয়েছে।')
+                );
+              }
+            }, 750);
+          }
+        );
+        if (cancelled) {
+          void browserHandle.remove();
+        } else {
+          handles.push(browserHandle);
+        }
+      } catch (err) {
+        console.warn('Capacitor OAuth deep-link listener setup notice:', err);
+      }
+    };
+
+    void setupListeners();
+
+    return () => {
+      cancelled = true;
+      clearPending();
+      for (const h of handles) {
+        void h.remove().catch(() => {});
+      }
+    };
+  }, [syncUserRecords]);
+
   const loginWithGoogle = useCallback(async () => {
+    // Native Android Capacitor WebView path: NEVER run signInWithRedirect inside WebView (403 disallowed_useragent)
+    if (isNativeCapacitorShell()) {
+      const capPlugins = (
+        window as unknown as {
+          Capacitor?: {
+            Plugins?: {
+              FirebaseAuthentication?: {
+                signInWithGoogle?: () => Promise<{
+                  credential?: { idToken?: string; accessToken?: string };
+                }>;
+              };
+            };
+          };
+        }
+      ).Capacitor?.Plugins;
+
+      if (capPlugins?.FirebaseAuthentication?.signInWithGoogle) {
+        try {
+          const nativeRes =
+            await capPlugins.FirebaseAuthentication.signInWithGoogle();
+          const idToken = nativeRes?.credential?.idToken || null;
+          const accessToken = nativeRes?.credential?.accessToken || null;
+          if (idToken || accessToken) {
+            const cred = await signInWithCredential(
+              auth,
+              GoogleAuthProvider.credential(idToken, accessToken)
+            );
+            setFirebaseUser(cred.user);
+            setVerificationTick((v) => v + 1);
+            void syncUserRecords(cred.user);
+            return;
+          }
+        } catch (nativeErr) {
+          console.warn('Native FirebaseAuthentication fallback notice:', nativeErr);
+        }
+      }
+
+      const bridgeOrigin = resolveApkAuthBridgeOrigin();
+      if (!bridgeOrigin) {
+        const bridgeErr = new Error(
+          'এই স্বতন্ত্র APK বিল্ডে সরাসরি Google ব্রিজ সার্ভার (APP_URL) যুক্ত না থাকায় Android WebView থেকে Google লগইন ব্লক করা হয়েছে। অনুগ্রহ করে ইমেইল ও পাসওয়ার্ড দিয়ে লগইন করুন—অথবা নিচের বাটনে ট্যাপ করে আপনার Google ইমেইলের জন্য পাসওয়ার্ড সেট করুন।'
+        ) as Error & { code?: string };
+        bridgeErr.code = APK_GOOGLE_BRIDGE_UNAVAILABLE_CODE;
+        throw bridgeErr;
+      }
+
+      const nonce = generateAuthNonce();
+      const targetUrl = `${bridgeOrigin}/?apk_google_auth=1&nonce=${encodeURIComponent(
+        nonce
+      )}&scheme=${encodeURIComponent('com.roktodei.app')}`;
+
+      if (pendingApkGoogleAuthRef.current) {
+        window.clearTimeout(pendingApkGoogleAuthRef.current.timeoutId);
+        pendingApkGoogleAuthRef.current = null;
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          if (pendingApkGoogleAuthRef.current?.nonce === nonce) {
+            pendingApkGoogleAuthRef.current = null;
+            reject(
+              new Error('Google লগইনের সময়সীমা শেষ হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।')
+            );
+          }
+        }, 180_000);
+
+        pendingApkGoogleAuthRef.current = {
+          nonce,
+          resolve,
+          reject,
+          timeoutId,
+        };
+
+        Browser.open({ url: targetUrl, presentationStyle: 'popover' }).catch(
+          (openErr) => {
+            if (pendingApkGoogleAuthRef.current?.nonce === nonce) {
+              window.clearTimeout(timeoutId);
+              pendingApkGoogleAuthRef.current = null;
+            }
+            reject(
+              new Error(
+                openErr instanceof Error
+                  ? openErr.message
+                  : 'Chrome ব্রাউজার চালু করা যায়নি।'
+              )
+            );
+          }
+        );
+      });
+      return;
+    }
+
     try {
       const cred = await signInWithPopup(auth, googleProvider);
       setFirebaseUser(cred.user);
+      setVerificationTick((v) => v + 1);
       await syncUserRecords(cred.user);
     } catch (error) {
       const code =
@@ -280,6 +528,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         await sendEmailVerification(cred.user);
         setFirebaseUser(cred.user);
+        setVerificationTick((v) => v + 1);
       } catch (error) {
         throw new Error(formatFirebaseAuthError(error));
       }
@@ -295,12 +544,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email.trim(),
           password
         );
-        await cred.user.reload();
-        if (cred.user.emailVerified) {
-          await cred.user.getIdToken(true);
+        try {
+          await Promise.race([
+            (async () => {
+              await cred.user.reload();
+              if (cred.user.emailVerified) {
+                await cred.user.getIdToken(true);
+              }
+            })(),
+            new Promise<void>((resolve) => window.setTimeout(resolve, 4500)),
+          ]);
+        } catch {
+          // Non-fatal on slow mobile connections right after sign-in
         }
-        setFirebaseUser(auth.currentUser);
-        await syncUserRecords(auth.currentUser);
+        const activeUser = auth.currentUser || cred.user;
+        setFirebaseUser(activeUser);
+        setVerificationTick((v) => v + 1);
+        void syncUserRecords(activeUser);
       } catch (error) {
         throw new Error(formatFirebaseAuthError(error));
       }
