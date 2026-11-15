@@ -31,6 +31,7 @@ import {
   contactMethodLabel,
   formatTimestamp,
 } from '../lib/i18n';
+import { Geolocation } from '@capacitor/geolocation';
 import { isNativeCapacitorShell } from '../lib/platform';
 import { BLOOD_GROUPS, daysSinceDate } from '../lib/validation';
 import {
@@ -53,6 +54,7 @@ import { ReportModal } from './ReportModal';
 import { DonorMapComponent } from './DonorMapComponent';
 import {
   findNearestDistrictId,
+  findNearestUpazilaId,
   formatDistanceKm,
   getAreaCoords,
   getObfuscatedDonorCoords,
@@ -129,7 +131,7 @@ export function DonorSearchView({
   // Report modal state
   const [reportTarget, setReportTarget] = useState<DonorProfile | null>(null);
 
-  // Real-Time Google Maps, Live GPS & Reverse-Geocoded Address States
+  // Live Map, GPS & Reverse-Geocoded Address States
   const [userLocation, setUserLocation] = useState<GeoCoordinate | null>(null);
   const [userAddress, setUserAddress] = useState<string | null>(null);
   const [locationMode, setLocationMode] = useState<'gps' | 'manual' | null>(null);
@@ -166,59 +168,106 @@ export function DonorSearchView({
       };
       setResolvingAddress(true);
 
+      const resolveLocalBangladeshArea = (): string | null => {
+        const nearestUpazilaId = findNearestUpazilaId(coords);
+        if (nearestUpazilaId) {
+          for (const distObj of DISTRICTS) {
+            const matchedUpazila = distObj.upazilas.find(
+              (u) => u.id === nearestUpazilaId
+            );
+            if (matchedUpazila) {
+              return `${matchedUpazila[activeLang]}, ${distObj[activeLang]}, ${
+                activeLang === 'bn' ? 'বাংলাদেশ' : 'Bangladesh'
+              }`;
+            }
+          }
+        }
+        const nearestDistId = findNearestDistrictId(coords);
+        const distObj = DISTRICTS.find((d) => d.id === nearestDistId);
+        if (distObj) {
+          return `${distObj[activeLang]}, ${
+            activeLang === 'bn' ? 'বাংলাদেশ (নিকটবর্তী এলাকা)' : 'Bangladesh (Approx.)'
+          }`;
+        }
+        return null;
+      };
+
       try {
         const apiBase = (
           (import.meta as { env?: Record<string, string | undefined> }).env
             ?.VITE_API_BASE_URL || ''
         ).replace(/\/$/, '');
 
-        if (isNativeCapacitorShell() && !apiBase) {
-          const nearestDistId = findNearestDistrictId(coords);
-          const distObj = DISTRICTS.find((d) => d.id === nearestDistId);
-          if (distObj) {
-            setUserAddress(
-              `${distObj[activeLang]}, ${
-                activeLang === 'bn' ? 'বাংলাদেশ (নিকটবর্তী এলাকা)' : 'Bangladesh (Approx.)'
-              }`
-            );
+        if (!isNativeCapacitorShell() || apiBase) {
+          const res = await fetch(
+            `${apiBase}/api/reverse-geocode?lat=${encodeURIComponent(
+              coords.lat
+            )}&lng=${encodeURIComponent(coords.lng)}&lang=${activeLang}`
+          );
+
+          const ct = res.headers.get('content-type') || '';
+          if (res.ok && ct.includes('application/json')) {
+            const data = (await res.json()) as {
+              formattedAddress?: string;
+              areaLabel?: string;
+              source?: string;
+            };
+            const resolved =
+              data.formattedAddress?.trim() || data.areaLabel?.trim() || '';
+            if (resolved && data.source !== 'fallback') {
+              setUserAddress(resolved);
+              return;
+            }
           }
-          return;
         }
 
-        const res = await fetch(
-          `${apiBase}/api/reverse-geocode?lat=${encodeURIComponent(
-            coords.lat
-          )}&lng=${encodeURIComponent(coords.lng)}&lang=${activeLang}`
-        );
-
-        if (res.status === 429) {
-          window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
-          return;
+        // Direct CORS-friendly free reverse geocoding for standalone APK or server fallback
+        try {
+          const bdcRes = await fetch(
+            `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${encodeURIComponent(
+              coords.lat
+            )}&longitude=${encodeURIComponent(
+              coords.lng
+            )}&localityLanguage=${activeLang}`,
+            { signal: AbortSignal.timeout(4500) }
+          );
+          if (bdcRes.ok) {
+            const bdcData = (await bdcRes.json()) as {
+              locality?: string;
+              city?: string;
+              principalSubdivision?: string;
+              countryName?: string;
+            };
+            const parts = Array.from(
+              new Set(
+                [
+                  bdcData.locality,
+                  bdcData.city,
+                  bdcData.principalSubdivision,
+                  bdcData.countryName,
+                ]
+                  .map((s) => (s || '').trim())
+                  .filter(Boolean)
+              )
+            );
+            if (parts.length > 0) {
+              setUserAddress(parts.join(', '));
+              return;
+            }
+          }
+        } catch {
+          // Offline / blocked network -> fall back cleanly to local Bangladesh area resolver
         }
 
-        const ct = res.headers.get('content-type') || '';
-        if (!ct.includes('application/json')) {
-          return;
-        }
-
-        const data = (await res.json()) as {
-          formattedAddress?: string;
-          areaLabel?: string;
-          error?: { status?: string };
-        };
-
-        if (data?.error?.status === 'RESOURCE_EXHAUSTED') {
-          window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
-          return;
-        }
-
-        const resolved =
-          data.formattedAddress?.trim() || data.areaLabel?.trim() || '';
-        if (resolved) {
-          setUserAddress(resolved);
+        const localLabel = resolveLocalBangladeshArea();
+        if (localLabel) {
+          setUserAddress(localLabel);
         }
       } catch {
-        // Keep existing address or fall back gracefully
+        const localLabel = resolveLocalBangladeshArea();
+        if (localLabel) {
+          setUserAddress(localLabel);
+        }
       } finally {
         setResolvingAddress(false);
       }
@@ -226,40 +275,75 @@ export function DonorSearchView({
     []
   );
 
-  // Automatically watch user's live GPS location when viewing the verified directory
-  useEffect(() => {
-    if (!canViewDirectory) {
-      return;
+  const nativeWatchIdRef = useRef<string | null>(null);
+  const webWatchIdRef = useRef<number | null>(null);
+
+  const applyGpsCoords = useCallback(
+    (lat: number, lng: number, forceGeocode = false) => {
+      const nextCoords: GeoCoordinate = { lat, lng };
+      setUserLocation(nextCoords);
+      setLocationMode('gps');
+      locationModeRef.current = 'gps';
+      setLocatingUser(false);
+      setLocationError(null);
+      void resolveUserAddress(nextCoords, lang, forceGeocode);
+    },
+    [lang, resolveUserAddress]
+  );
+
+  const stopLiveGpsWatch = useCallback(() => {
+    if (webWatchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(webWatchIdRef.current);
+      webWatchIdRef.current = null;
     }
-    if (!navigator.geolocation) {
-      if (locationModeRef.current !== 'manual') {
-        setLocationError(
-          lang === 'bn'
-            ? 'ব্রাউজারে GPS নেই — নিচ থেকে জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
-            : 'Geolocation not available — pick your district or tap the map.'
+    if (nativeWatchIdRef.current !== null) {
+      const id = nativeWatchIdRef.current;
+      nativeWatchIdRef.current = null;
+      void Geolocation.clearWatch({ id }).catch(() => {});
+    }
+  }, []);
+
+  const startLiveGpsWatch = useCallback(async () => {
+    stopLiveGpsWatch();
+
+    if (isNativeCapacitorShell()) {
+      try {
+        const perm = await Geolocation.checkPermissions();
+        if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+          return;
+        }
+        const watchId = await Geolocation.watchPosition(
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+          (pos, err) => {
+            if (locationModeRef.current === 'manual') {
+              setLocatingUser(false);
+              return;
+            }
+            if (pos?.coords) {
+              applyGpsCoords(pos.coords.latitude, pos.coords.longitude);
+            } else if (err) {
+              setLocatingUser(false);
+            }
+          }
         );
+        nativeWatchIdRef.current = watchId;
+      } catch {
+        setLocatingUser(false);
       }
       return;
     }
 
-    setLocatingUser(true);
-    setLocationError(null);
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      return;
+    }
 
-    const watchId = navigator.geolocation.watchPosition(
+    webWatchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         if (locationModeRef.current === 'manual') {
           setLocatingUser(false);
           return;
         }
-        const nextCoords: GeoCoordinate = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        };
-        setUserLocation(nextCoords);
-        setLocationMode('gps');
-        setLocatingUser(false);
-        setLocationError(null);
-        void resolveUserAddress(nextCoords, lang);
+        applyGpsCoords(pos.coords.latitude, pos.coords.longitude);
       },
       (err) => {
         setLocatingUser(false);
@@ -269,27 +353,91 @@ export function DonorSearchView({
         if (err.code === err.PERMISSION_DENIED) {
           setLocationError(
             lang === 'bn'
-              ? 'GPS পারমিশন পাওয়া যায়নি। এখান থেকে আপনার জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
-              : 'GPS permission blocked. Select your district here or tap anywhere on the map.'
-          );
-        } else {
-          setLocationError(
-            lang === 'bn'
-              ? 'বর্তমান GPS অবস্থান পাওয়া যায়নি। এখান থেকে আপনার জেলা বেছে নিন।'
-              : 'Unable to detect GPS location. Select your district here or tap on the map.'
+              ? 'ব্রাউজারে লোকেশন পারমিশন ব্লক করা আছে। জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
+              : 'Location permission is blocked in your browser. Pick a district or tap the map.'
           );
         }
       },
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+      { enableHighAccuracy: false, maximumAge: 15000, timeout: 15000 }
     );
+  }, [applyGpsCoords, lang, stopLiveGpsWatch]);
 
+  // Automatically watch user's live GPS location when viewing the verified directory
+  useEffect(() => {
+    if (!canViewDirectory) {
+      stopLiveGpsWatch();
+      return;
+    }
+
+    if (!isNativeCapacitorShell() && (typeof navigator === 'undefined' || !navigator.geolocation)) {
+      if (locationModeRef.current !== 'manual') {
+        setLocationError(
+          lang === 'bn'
+            ? 'এই ডিভাইসে GPS নেই — জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
+            : 'Geolocation unavailable — pick your district or tap the map.'
+        );
+      }
+      return;
+    }
+
+    void startLiveGpsWatch();
     return () => {
-      navigator.geolocation.clearWatch(watchId);
+      stopLiveGpsWatch();
     };
-  }, [canViewDirectory, lang, resolveUserAddress]);
+  }, [canViewDirectory, lang, startLiveGpsWatch, stopLiveGpsWatch]);
 
-  const handleRequestUserLocation = useCallback(() => {
-    if (!navigator.geolocation) {
+  const handleRequestUserLocation = useCallback(async () => {
+    setLocatingUser(true);
+    setLocationError(null);
+
+    if (isNativeCapacitorShell()) {
+      try {
+        let perm = await Geolocation.checkPermissions();
+        if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+          perm = await Geolocation.requestPermissions();
+        }
+        if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+          setLocatingUser(false);
+          setLocationError(
+            lang === 'bn'
+              ? 'লোকেশন পারমিশন দেওয়া হয়নি। ফোনের Settings থেকে Location Allow করুন অথবা নিচে জেলা বেছে নিন।'
+              : 'Location permission denied. Enable Location in phone Settings or select a district.'
+          );
+          return;
+        }
+
+        try {
+          const pos = await Geolocation.getCurrentPosition({
+            enableHighAccuracy: true,
+            timeout: 7000,
+            maximumAge: 10000,
+          });
+          applyGpsCoords(pos.coords.latitude, pos.coords.longitude, true);
+          void startLiveGpsWatch();
+          return;
+        } catch {
+          const fallbackPos = await Geolocation.getCurrentPosition({
+            enableHighAccuracy: false,
+            timeout: 8000,
+            maximumAge: 60000,
+          });
+          applyGpsCoords(fallbackPos.coords.latitude, fallbackPos.coords.longitude, true);
+          void startLiveGpsWatch();
+          return;
+        }
+      } catch {
+        setLocatingUser(false);
+        setLocationError(
+          lang === 'bn'
+            ? 'ফোনের GPS/Location চালু নেই। ফোনের কুইক সেটিংস থেকে Location অন করে আবার চেষ্টা করুন।'
+            : 'Phone GPS/Location appears off. Turn on device Location and try again.'
+        );
+        return;
+      }
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setLocatingUser(false);
       setLocationError(
         lang === 'bn'
           ? 'ব্রাউজারে GPS সাপোর্ট নেই। অনুগ্রহ করে জেলা বেছে নিন বা ম্যাপে ট্যাপ করুন।'
@@ -297,31 +445,52 @@ export function DonorSearchView({
       );
       return;
     }
-    setLocatingUser(true);
-    setLocationError(null);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const nextCoords: GeoCoordinate = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        };
-        setUserLocation(nextCoords);
-        setLocationMode('gps');
-        locationModeRef.current = 'gps';
-        setLocatingUser(false);
-        void resolveUserAddress(nextCoords, lang, true);
-      },
-      () => {
+
+    const requestWebPosition = (highAccuracy: boolean) =>
+      new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: highAccuracy,
+          timeout: highAccuracy ? 7000 : 8000,
+          maximumAge: highAccuracy ? 10000 : 60000,
+        });
+      });
+
+    try {
+      const pos = await requestWebPosition(true);
+      applyGpsCoords(pos.coords.latitude, pos.coords.longitude, true);
+      void startLiveGpsWatch();
+    } catch (firstErr) {
+      const geoErr = firstErr as GeolocationPositionError | undefined;
+      if (geoErr && geoErr.code === 1) {
         setLocatingUser(false);
         setLocationError(
           lang === 'bn'
-            ? 'GPS পারমিশন বন্ধ আছে। নিচের ড্রপডাউন থেকে জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
-            : 'GPS permission is blocked. Choose your district below or tap anywhere on the map.'
+            ? 'ব্রাউজার বা প্রিভিউ উইন্ডোতে GPS পারমিশন ব্লক করা আছে। সাইটের পারমিশন থেকে Location Allow করুন অথবা ম্যাপে ট্যাপ করে পিন বসান।'
+            : 'GPS permission is blocked in this browser/preview window. Allow Location access or tap anywhere on the map.'
         );
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
-  }, [lang, resolveUserAddress]);
+        return;
+      }
+
+      // Retry once with Wi-Fi / cell-tower network location (fast indoors)
+      try {
+        const netPos = await requestWebPosition(false);
+        applyGpsCoords(netPos.coords.latitude, netPos.coords.longitude, true);
+        void startLiveGpsWatch();
+      } catch (secondErr) {
+        const err2 = secondErr as GeolocationPositionError | undefined;
+        setLocatingUser(false);
+        setLocationError(
+          err2?.code === 1
+            ? lang === 'bn'
+              ? 'GPS পারমিশন বন্ধ আছে। ব্রাউজার সেটিংস থেকে Allow করুন অথবা জেলা বেছে নিন।'
+              : 'GPS permission is blocked. Allow Location in browser settings or pick a district.'
+            : lang === 'bn'
+            ? 'এই মুহূর্তে লাইভ GPS সিগন্যাল পাওয়া যায়নি। ফোনের Location চালু করে আবার চেষ্টা করুন বা ম্যাপে ট্যাপ করুন।'
+            : 'Could not get live GPS signal right now. Turn on device Location or tap on the map.'
+        );
+      }
+    }
+  }, [applyGpsCoords, lang, startLiveGpsWatch]);
 
   const handleSetManualLocation = useCallback(
     (coords: GeoCoordinate, customLabel?: string) => {
@@ -681,9 +850,9 @@ export function DonorSearchView({
               <button
                 type="button"
                 onClick={() => onNavigate('blood_requests')}
-                className="min-h-[48px] px-6 py-3 bg-white text-[#C80828] hover:bg-neutral-50 rounded-xl text-sm font-bold inline-flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg whitespace-nowrap"
+                className="min-h-[46px] px-5 sm:px-6 py-3 bg-white text-[#C80828] hover:bg-neutral-50 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg sm:whitespace-nowrap text-center"
               >
-                <Droplets className="w-4 h-4 fill-current" />
+                <Droplets className="w-4 h-4 fill-current shrink-0" />
                 <span>
                   {lang === 'bn'
                     ? 'জরুরি রক্তের অনুরোধ পোস্ট করুন'
@@ -701,9 +870,9 @@ export function DonorSearchView({
                       onNavigate('profile');
                     }
                   }}
-                  className="min-h-[48px] px-6 py-3 bg-white/15 hover:bg-white/25 text-white border border-white/30 rounded-xl text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
+                  className="min-h-[46px] px-5 sm:px-6 py-3 bg-white/15 hover:bg-white/25 text-white border border-white/30 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer sm:whitespace-nowrap text-center"
                 >
-                  <UserPlus className="w-4 h-4" />
+                  <UserPlus className="w-4 h-4 shrink-0" />
                   <span>
                     {lang === 'bn'
                       ? 'স্বেচ্ছায় রক্তদাতা হন'
@@ -1082,7 +1251,7 @@ export function DonorSearchView({
             </div>
           ) : (
             <div className="space-y-5">
-              {/* Live Real-Time Google Map with User Location Address & Nearest Donor Pins */}
+              {/* Live Real-Time OpenStreetMap / CARTO Map with User Location Address & Nearest Donor Pins */}
               <DonorMapComponent
                 donors={filteredDonors}
                 userLocation={userLocation}
@@ -1095,6 +1264,7 @@ export function DonorSearchView({
                 focusCoords={mapFocusCoords}
                 onRequestLocation={handleRequestUserLocation}
                 onSetManualLocation={handleSetManualLocation}
+                onDismissLocationError={() => setLocationError(null)}
                 onSelectDonor={(d) => setSelectedDonorForModal(d)}
                 lang={lang}
               />

@@ -646,15 +646,15 @@ export function BloodRequestsView({
   return (
     <div className="space-y-8 pb-10">
       {/* Crimson Header Strip */}
-      <section className="bg-[#C80828] text-white py-7 sm:py-9 rounded-b-[2rem]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-wide text-white">
+      <section className="bg-[#C80828] text-white py-6 sm:py-9 rounded-b-[2rem]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 sm:gap-4">
+          <div className="space-y-1 min-w-0">
+            <h1 className="text-xl sm:text-3xl font-bold tracking-wide text-white leading-snug">
               {lang === 'bn'
                 ? 'জরুরি রক্তের অনুরোধ ও ডোনার বুকিং'
                 : 'Blood Requests & Donor Booking'}
             </h1>
-            <p className="text-xs sm:text-sm text-white/85">
+            <p className="text-xs sm:text-sm text-white/85 leading-relaxed">
               {lang === 'bn'
                 ? 'রক্তদাতা চূড়ান্ত হলে অনুরোধটি "বুক" করে রাখুন—এতে অযথা কল ও বিরক্তি স্বয়ংক্রিয়ভাবে বন্ধ থাকবে।'
                 : 'Post genuine hospital requests, respond as a donor, and book confirmed donors to stop extra calls.'}
@@ -665,9 +665,9 @@ export function BloodRequestsView({
             <button
               type="button"
               onClick={openCreateDialog}
-              className="min-h-[46px] px-5 py-2.5 bg-white text-[#C80828] hover:bg-neutral-100 text-sm font-semibold rounded-xl inline-flex items-center gap-2 whitespace-nowrap shrink-0 self-start sm:self-auto cursor-pointer"
+              className="min-h-[44px] max-w-full px-4 sm:px-5 py-2.5 bg-white text-[#C80828] hover:bg-neutral-100 text-xs sm:text-sm font-semibold rounded-xl inline-flex items-center justify-center gap-2 sm:whitespace-nowrap shrink-0 self-start sm:self-auto cursor-pointer"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-4 h-4 shrink-0" />
               <span>
                 {lang === 'bn'
                   ? 'রক্তের অনুরোধ পোস্ট করুন'
@@ -703,12 +703,12 @@ export function BloodRequestsView({
             {/* Toolbar: Segmented Tabs + Booking Status Filter + Blood Group Bar */}
             <div className="bg-white rounded-3xl border border-neutral-200/80 p-4 sm:p-5 space-y-4">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="inline-flex p-1 bg-[#FDF2F4] rounded-xl">
+                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 min-w-0">
+                  <div className="grid grid-cols-2 sm:inline-flex w-full sm:w-auto p-1 bg-[#FDF2F4] rounded-xl gap-1">
                     <button
                       type="button"
                       onClick={() => setSubTab('all')}
-                      className={`min-h-[38px] px-4 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap cursor-pointer ${
+                      className={`min-h-[38px] px-2.5 sm:px-4 py-1.5 text-xs font-semibold rounded-lg text-center cursor-pointer ${
                         subTab === 'all'
                           ? 'bg-[#C80828] text-white shadow-xs'
                           : 'text-[#8F1D30] hover:text-[#C80828]'
@@ -719,7 +719,7 @@ export function BloodRequestsView({
                     <button
                       type="button"
                       onClick={() => setSubTab('mine')}
-                      className={`min-h-[38px] px-4 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap cursor-pointer ${
+                      className={`min-h-[38px] px-2.5 sm:px-4 py-1.5 text-xs font-semibold rounded-lg text-center cursor-pointer ${
                         subTab === 'mine'
                           ? 'bg-[#C80828] text-white shadow-xs'
                           : 'text-[#8F1D30] hover:text-[#C80828]'
@@ -730,7 +730,7 @@ export function BloodRequestsView({
                   </div>
 
                   {subTab === 'all' && (
-                    <div className="inline-flex p-1 bg-neutral-100 rounded-xl">
+                    <div className="flex flex-wrap sm:inline-flex w-full sm:w-auto gap-1 p-1 bg-neutral-100 rounded-xl">
                       {(
                         [
                           [
@@ -753,7 +753,7 @@ export function BloodRequestsView({
                           key={stKey}
                           type="button"
                           onClick={() => setStatusFilter(stKey)}
-                          className={`min-h-[36px] px-3 py-1 text-xs font-semibold rounded-lg whitespace-nowrap cursor-pointer ${
+                          className={`flex-1 sm:flex-initial min-h-[36px] px-2.5 sm:px-3 py-1 text-[11px] sm:text-xs font-semibold rounded-lg text-center cursor-pointer ${
                             statusFilter === stKey
                               ? 'bg-white text-[#1F242D] shadow-xs'
                               : 'text-neutral-600 hover:text-[#1F242D]'

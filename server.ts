@@ -55,7 +55,7 @@ const userContactLookups = new Map<string, LookupRecord[]>();
 interface GeocodeCacheEntry {
   formattedAddress: string;
   areaLabel: string;
-  source: 'google_geocoding' | 'fallback';
+  source: 'osm_nominatim' | 'bigdatacloud' | 'fallback';
   expiresAt: number;
 }
 
@@ -275,7 +275,7 @@ async function startServer() {
     });
   });
 
-  // Server-side Reverse Geocoding proxy (CF1 compliant: keeps API key off REST URLs & avoids browser CORS issues)
+  // Server-side Free Reverse Geocoding proxy (OpenStreetMap Nominatim + BigDataCloud fallback — zero API key/quota)
   app.get('/api/reverse-geocode', async (req: Request, res: Response) => {
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
@@ -307,179 +307,134 @@ async function startServer() {
       return;
     }
 
-    const mapsApiKey =
-      process.env.GOOGLE_MAPS_API_KEY ||
-      process.env.VITE_GOOGLE_MAPS_API_KEY ||
-      firebaseConfig.apiKey ||
-      '';
-
-    if (!mapsApiKey) {
-      const fb = formatCoordFallback(lat, lng, lang);
-      res.json({ ...fb, source: 'fallback' });
-      return;
-    }
-
     try {
-      // 1. Primary: Modern Google Maps Geocoding API v4 REST endpoint
-      const v4Url = new URL(
-        'https://geocode.googleapis.com/v4/geocode/location'
-      );
-      v4Url.searchParams.set('location.latitude', String(lat));
-      v4Url.searchParams.set('location.longitude', String(lng));
-      v4Url.searchParams.set('languageCode', lang);
-      v4Url.searchParams.set('regionCode', 'BD');
+      // 1. Primary: OpenStreetMap Nominatim (Free, detailed Bangladesh street/thana/district labels)
+      const osmUrl = new URL('https://nominatim.openstreetmap.org/reverse');
+      osmUrl.searchParams.set('format', 'jsonv2');
+      osmUrl.searchParams.set('lat', String(lat));
+      osmUrl.searchParams.set('lon', String(lng));
+      osmUrl.searchParams.set('zoom', '16');
+      osmUrl.searchParams.set('addressdetails', '1');
+      osmUrl.searchParams.set('accept-language', lang === 'bn' ? 'bn,en' : 'en');
 
-      const v4Res = await fetch(v4Url.toString(), {
+      const osmRes = await fetch(osmUrl.toString(), {
         method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': mapsApiKey,
-          'X-Goog-FieldMask':
-            'results.placeId,results.formattedAddress,results.addressComponents,plusCode',
-          'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+          Accept: 'application/json',
+          'User-Agent': `RoktoDei/${serverPackageVersion} (Bangladesh Blood Donor App)`,
         },
+        signal: AbortSignal.timeout(4500),
       });
 
-      if (v4Res.status === 429) {
-        res.status(429).json({
-          code: 'RESOURCE_EXHAUSTED',
-          error: { status: 'RESOURCE_EXHAUSTED' },
-        });
-        return;
-      }
-
-      if (v4Res.ok) {
-        const v4Data = (await v4Res.json()) as {
-          error?: { status?: string };
-          results?: Array<{
-            formattedAddress?: string;
-            addressComponents?: Array<{
-              longText?: string;
-              shortText?: string;
-              types?: string[];
-            }>;
-          }>;
+      if (osmRes.ok) {
+        const osmData = (await osmRes.json()) as {
+          display_name?: string;
+          address?: {
+            road?: string;
+            neighbourhood?: string;
+            suburb?: string;
+            city_district?: string;
+            town?: string;
+            village?: string;
+            city?: string;
+            county?: string;
+            state_district?: string;
+            state?: string;
+            country?: string;
+          };
         };
 
-        if (v4Data.error?.status === 'RESOURCE_EXHAUSTED') {
-          res.status(429).json({
-            code: 'RESOURCE_EXHAUSTED',
-            error: { status: 'RESOURCE_EXHAUSTED' },
-          });
-          return;
-        }
+        const addr = osmData.address || {};
+        const localPart =
+          addr.neighbourhood ||
+          addr.suburb ||
+          addr.road ||
+          addr.village ||
+          addr.town ||
+          addr.city_district ||
+          '';
+        const cityPart =
+          addr.city ||
+          addr.county ||
+          (addr.state_district || '').replace(/\s*District$/i, '') ||
+          addr.state ||
+          '';
 
-        const firstResult = v4Data.results?.[0];
-        const formattedAddress = firstResult?.formattedAddress?.trim();
+        const conciseParts = Array.from(
+          new Set([localPart, cityPart].map((s) => s.trim()).filter(Boolean))
+        );
+        const areaLabel = conciseParts.join(', ');
+        const formattedAddress =
+          (conciseParts.length > 0
+            ? `${conciseParts.join(', ')}${addr.country ? `, ${addr.country}` : ''}`
+            : osmData.display_name?.trim()) || '';
+
         if (formattedAddress) {
-          const components = firstResult?.addressComponents || [];
-          const pickComponent = (types: string[]) =>
-            components.find((c) => c.types?.some((t) => types.includes(t)))
-              ?.longText || '';
-          const sublocality = pickComponent([
-            'sublocality_level_1',
-            'sublocality',
-            'neighborhood',
-            'route',
-          ]);
-          const locality = pickComponent([
-            'locality',
-            'administrative_area_level_2',
-          ]);
-          const areaLabel =
-            [sublocality, locality].filter(Boolean).join(', ') ||
-            formattedAddress;
-
           if (reverseGeocodeCache.size >= 200) {
             reverseGeocodeCache.clear();
           }
           reverseGeocodeCache.set(cacheKey, {
             formattedAddress,
-            areaLabel,
-            source: 'google_geocoding',
+            areaLabel: areaLabel || formattedAddress,
+            source: 'osm_nominatim',
             expiresAt: Date.now() + GEOCODE_CACHE_TTL_MS,
           });
           res.json({
             formattedAddress,
-            areaLabel,
-            source: 'google_geocoding',
+            areaLabel: areaLabel || formattedAddress,
+            source: 'osm_nominatim',
           });
           return;
         }
       }
 
-      // 2. Fallback REST endpoint: standard Geocoding REST API if v4 is unavailable on project key
-      const legacyUrl = new URL(
-        'https://maps.googleapis.com/maps/api/geocode/json'
+      // 2. Fallback: BigDataCloud Free Reverse Geocoding API (no API key required)
+      const bdcUrl = new URL(
+        'https://api.bigdatacloud.net/data/reverse-geocode-client'
       );
-      legacyUrl.searchParams.set('latlng', `${lat},${lng}`);
-      legacyUrl.searchParams.set('language', lang);
-      legacyUrl.searchParams.set('region', 'bd');
-      legacyUrl.searchParams.set('key', mapsApiKey);
+      bdcUrl.searchParams.set('latitude', String(lat));
+      bdcUrl.searchParams.set('longitude', String(lng));
+      bdcUrl.searchParams.set('localityLanguage', lang);
 
-      const legacyRes = await fetch(legacyUrl.toString());
-      if (legacyRes.status === 429) {
-        res.status(429).json({
-          code: 'RESOURCE_EXHAUSTED',
-          error: { status: 'RESOURCE_EXHAUSTED' },
-        });
-        return;
-      }
+      const bdcRes = await fetch(bdcUrl.toString(), {
+        signal: AbortSignal.timeout(4500),
+      });
 
-      if (legacyRes.ok) {
-        const legacyData = (await legacyRes.json()) as {
-          status?: string;
-          results?: Array<{
-            formatted_address?: string;
-            address_components?: Array<{
-              long_name?: string;
-              types?: string[];
-            }>;
-          }>;
+      if (bdcRes.ok) {
+        const bdcData = (await bdcRes.json()) as {
+          locality?: string;
+          city?: string;
+          principalSubdivision?: string;
+          countryName?: string;
         };
-
-        if (legacyData.status === 'OVER_QUERY_LIMIT') {
-          res.status(429).json({
-            code: 'RESOURCE_EXHAUSTED',
-            error: { status: 'RESOURCE_EXHAUSTED' },
-          });
-          return;
-        }
-
-        const firstLegacy = legacyData.results?.[0];
-        const formattedAddress = firstLegacy?.formatted_address?.trim();
-        if (formattedAddress) {
-          const components = firstLegacy?.address_components || [];
-          const pickComp = (types: string[]) =>
-            components.find((c) => c.types?.some((t) => types.includes(t)))
-              ?.long_name || '';
-          const sublocality = pickComp([
-            'sublocality_level_1',
-            'sublocality',
-            'neighborhood',
-            'route',
-          ]);
-          const locality = pickComp([
-            'locality',
-            'administrative_area_level_2',
-          ]);
-          const areaLabel =
-            [sublocality, locality].filter(Boolean).join(', ') ||
-            formattedAddress;
-
+        const parts = Array.from(
+          new Set(
+            [
+              bdcData.locality,
+              bdcData.city,
+              bdcData.principalSubdivision,
+              bdcData.countryName,
+            ]
+              .map((s) => (s || '').trim())
+              .filter(Boolean)
+          )
+        );
+        if (parts.length > 0) {
+          const areaLabel = parts.slice(0, 2).join(', ');
+          const formattedAddress = parts.join(', ');
           if (reverseGeocodeCache.size >= 200) {
             reverseGeocodeCache.clear();
           }
           reverseGeocodeCache.set(cacheKey, {
             formattedAddress,
             areaLabel,
-            source: 'google_geocoding',
+            source: 'bigdatacloud',
             expiresAt: Date.now() + GEOCODE_CACHE_TTL_MS,
           });
           res.json({
             formattedAddress,
             areaLabel,
-            source: 'google_geocoding',
+            source: 'bigdatacloud',
           });
           return;
         }

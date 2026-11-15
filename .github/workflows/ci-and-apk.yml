@@ -120,7 +120,7 @@ jobs:
           }
           EOF
 
-          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/browser@6 @capacitor/app@6
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/browser@6 @capacitor/app@6 @capacitor/geolocation@6
 
           cat <<EOF > capacitor.config.json
           {
@@ -208,6 +208,19 @@ jobs:
               .replace(/versionName\s+"[^"]+"/, `versionName "${ver}"`);
             fs.writeFileSync(gradlePath, gradle);
           '
+
+          find cap-build/android/app/src/main/java -name "MainActivity.java" | while read -r main_act; do
+            node -e '
+              const fs = require("fs");
+              const file = process.argv[1];
+              let src = fs.readFileSync(file, "utf8");
+              if (!src.includes("setTextZoom(100)")) {
+                const hook = "\n    @Override\n    public void onResume() {\n        super.onResume();\n        if (getBridge() != null && getBridge().getWebView() != null) {\n            getBridge().getWebView().getSettings().setTextZoom(100);\n        }\n    }\n";
+                src = src.replace(/\}\s*$/, hook + "}\n");
+                fs.writeFileSync(file, src);
+              }
+            ' "$main_act"
+          done
 
       - name: Build & Sign Release APK
         working-directory: cap-build

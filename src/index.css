@@ -17,6 +17,17 @@
 }
 
 @layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  @media (max-width: 639px) {
+    html {
+      font-size: 14px;
+    }
+  }
+
   html,
   body {
     font-family: var(--font-sans);
@@ -55,3 +66,14 @@
     display: none;
   }
 }
+
+.leaflet-container {
+  font-family: var(--font-sans);
+}
+
+.leaflet-container img.leaflet-tile,
+.leaflet-container .leaflet-marker-pane img {
+  max-width: none !important;
+  max-height: none !important;
+}
+

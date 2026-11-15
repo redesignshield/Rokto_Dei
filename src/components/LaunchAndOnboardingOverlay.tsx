@@ -51,7 +51,13 @@ function markOnboardingCompleted(): void {
   }
 }
 
-function SlideHeroIllustration({ slideIndex }: { slideIndex: number }) {
+function SlideHeroIllustration({
+  slideIndex,
+  lang,
+}: {
+  slideIndex: number;
+  lang: 'bn' | 'en';
+}) {
   if (slideIndex === 0) {
     return (
       <svg
@@ -139,7 +145,7 @@ function SlideHeroIllustration({ slideIndex }: { slideIndex: number }) {
         <div className="flex items-center justify-between text-xs font-semibold text-[#C80828]">
           <span className="inline-flex items-center gap-1.5">
             <MapPin className="w-4 h-4" />
-            <span>Google Maps · Bangladesh</span>
+            <span>{lang === 'bn' ? 'লাইভ ম্যাপ · বাংলাদেশ' : 'Live Map · Bangladesh'}</span>
           </span>
           <span className="font-mono text-[11px] text-emerald-700">Live GPS</span>
         </div>
@@ -262,7 +268,7 @@ export function LaunchAndOnboardingOverlay() {
             heading: 'Real-Time Nearest Donor Map',
             subtext: 'Find the closest ready donors first',
             detail:
-              'Use live GPS or pick any district/area to sort verified donors from nearest to farthest on Google Maps.',
+              'Use live GPS or pick any district/area to sort verified donors from nearest to farthest on the live map.',
           },
           {
             heading: 'Verified Contact & Call Lock',
@@ -385,7 +391,7 @@ export function LaunchAndOnboardingOverlay() {
 
         {/* Slide Illustration */}
         <div className="w-full pt-1">
-          <SlideHeroIllustration slideIndex={slideIndex} />
+          <SlideHeroIllustration slideIndex={slideIndex} lang={lang} />
         </div>
 
         {/* Interactive 3-Pillar Feature Strip */}

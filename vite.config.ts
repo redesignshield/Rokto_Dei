@@ -166,8 +166,8 @@ export default defineConfig(() => {
             if (id.includes('node_modules/lucide-react/')) {
               return 'vendor-lucide';
             }
-            if (id.includes('node_modules/@vis.gl/react-google-maps/')) {
-              return 'vendor-maps';
+            if (id.includes('node_modules/leaflet/')) {
+              return 'vendor-leaflet';
             }
           },
         },

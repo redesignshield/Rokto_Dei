@@ -141,7 +141,7 @@ export const BANGLADESH_CENTER: GeoCoordinate = {
   lng: 90.4125,
 };
 
-// Soft bounding box keeping Google Maps focused cleanly on Bangladesh
+// Soft bounding box keeping the live map focused cleanly on Bangladesh
 export const BANGLADESH_MAP_BOUNDS = {
   north: 26.85,
   south: 20.35,
@@ -262,6 +262,29 @@ export function findNearestDistrictId(coords: GeoCoordinate): string | null {
     if (dist < bestDist) {
       bestDist = dist;
       bestId = districtId;
+    }
+  }
+  return bestId;
+}
+
+export function findNearestUpazilaId(
+  coords: GeoCoordinate,
+  maxDistanceKm = 15
+): string | null {
+  let bestId: string | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const [upazilaId, center] of Object.entries(
+    BANGLADESH_UPAZILA_COORDINATES
+  )) {
+    const dist = haversineDistance(
+      coords.lat,
+      coords.lng,
+      center.lat,
+      center.lng
+    );
+    if (dist <= maxDistanceKm && dist < bestDist) {
+      bestDist = dist;
+      bestId = upazilaId;
     }
   }
   return bestId;
