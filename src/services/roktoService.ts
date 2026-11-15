@@ -5,6 +5,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -13,7 +14,7 @@ import {
   writeBatch,
   Timestamp,
 } from 'firebase/firestore';
-import type { QueryConstraint } from 'firebase/firestore';
+import type { QueryConstraint, QueryDocumentSnapshot, Unsubscribe } from 'firebase/firestore';
 import { updateProfile } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { isValidLocationHierarchy } from '../data/bdLocations';
@@ -29,12 +30,20 @@ import {
   sanitizeText,
   SCHEMA_LIMITS,
 } from '../lib/validation';
+import {
+  isTrustedGitHubUrl,
+  isValidGithubRepoSlug,
+  isValidSha256Hex,
+  normalizeSemVer,
+  sanitizePlainReleaseText,
+} from '../lib/appVersion';
 import type {
   AbuseReport,
   AccountStatus,
   AdminRoleRecord,
   AdminRoleType,
   AppLanguage,
+  AppReleaseConfig,
   AppView,
   AuditActionType,
   AuditLogRecord,
@@ -57,11 +66,6 @@ import type {
   RequestPledge,
   UserProfile,
 } from '../types';
-import {
-  getDemoDonorByUid,
-  isDemoRecordId,
-  DEMO_DONOR_PHONES,
-} from '../data/removableDemoData';
 
 // =========================================================================
 // 1. User Account Profile Service (/users/{uid})
@@ -614,30 +618,16 @@ export async function getDonorProfileByUid(uid: string): Promise<{
 }> {
   if (!uid) return { donor: null };
 
-  if (isDemoRecordId(uid)) {
-    const demo = getDemoDonorByUid(uid);
-    const phone = DEMO_DONOR_PHONES[uid] || '+8801700000000';
-    return { donor: demo || null, phoneNumber: phone };
-  }
-
   try {
     const snap = await getDoc(doc(db, 'donors', uid));
     if (snap.exists()) {
       return { donor: snap.data() as DonorProfile };
     }
   } catch (err) {
-    const demo = getDemoDonorByUid(uid);
-    if (demo) {
-      return { donor: demo, phoneNumber: DEMO_DONOR_PHONES[uid] || '+8801700000000' };
-    }
     handleFirestoreError(err, OperationType.GET, `donors/${uid}`);
   }
 
-  const demo = getDemoDonorByUid(uid);
-  return {
-    donor: demo || null,
-    phoneNumber: demo ? DEMO_DONOR_PHONES[uid] || '+8801700000000' : undefined,
-  };
+  return { donor: null };
 }
 
 export interface SaveDonorInput {
@@ -1118,24 +1108,21 @@ export interface DonorSearchResult {
   availableCount: number;
 }
 
-export async function searchActiveDonors(
-  filters: DonorSearchFilters
-): Promise<DonorSearchResult> {
+function buildActiveDonorQuery(filters: DonorSearchFilters) {
   const constraints: QueryConstraint[] = [
     where('isListed', '==', true),
     where('accountStatus', '==', 'active'),
     where('bloodGroup', '==', filters.bloodGroup),
     limit(200),
   ];
+  return query(collection(db, 'donors'), ...constraints);
+}
 
-  let snap;
-  try {
-    snap = await getDocs(query(collection(db, 'donors'), ...constraints));
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'donors');
-  }
-
-  const allMatchingGroup = snap.docs.map((d) => d.data() as DonorProfile);
+function shapeDonorSearchResult(
+  docs: QueryDocumentSnapshot[],
+  filters: DonorSearchFilters
+): DonorSearchResult {
+  const allMatchingGroup = docs.map((d) => d.data() as DonorProfile);
 
   const locationMatched = allMatchingGroup.filter((donor) => {
     if (filters.divisionId && donor.divisionId !== filters.divisionId) {
@@ -1172,6 +1159,40 @@ export async function searchActiveDonors(
     totalListedCount,
     availableCount,
   };
+}
+
+export async function searchActiveDonors(
+  filters: DonorSearchFilters
+): Promise<DonorSearchResult> {
+  let snap;
+  try {
+    snap = await getDocs(buildActiveDonorQuery(filters));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'donors');
+  }
+
+  return shapeDonorSearchResult(snap.docs, filters);
+}
+
+/**
+ * Real-time Firestore listener for listed active donors matching the blood group & filters.
+ */
+export function subscribeActiveDonors(
+  filters: DonorSearchFilters,
+  onResult: (result: DonorSearchResult) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  return onSnapshot(
+    buildActiveDonorQuery(filters),
+    (snapshot) => {
+      onResult(shapeDonorSearchResult(snapshot.docs, filters));
+    },
+    (error) => {
+      if (onError) {
+        onError(error instanceof Error ? error : new Error('রক্তদাতার তালিকা লোড করতে সমস্যা হয়েছে।'));
+      }
+    }
+  );
 }
 
 // =========================================================================
@@ -2436,3 +2457,118 @@ export async function sendRealtimeNotification(
     return '';
   }
 }
+
+// =========================================================================
+// 11. Authoritative App Release & Update Feed (/appConfig/release)
+// =========================================================================
+export function subscribeAppReleaseConfig(
+  onUpdate: (config: AppReleaseConfig | null) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const ref = doc(db, 'appConfig', 'release');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(null);
+        return;
+      }
+      onUpdate(snap.data() as AppReleaseConfig);
+    },
+    (error) => {
+      if (isOfflineError(error)) {
+        return;
+      }
+      if (onError) {
+        onError(error instanceof Error ? error : new Error('Release feed error'));
+      }
+    }
+  );
+}
+
+export async function getAppReleaseConfig(): Promise<AppReleaseConfig | null> {
+  try {
+    const snap = await getDoc(doc(db, 'appConfig', 'release'));
+    return snap.exists() ? (snap.data() as AppReleaseConfig) : null;
+  } catch (error) {
+    if (isOfflineError(error)) return null;
+    handleFirestoreError(error, OperationType.GET, 'appConfig/release');
+  }
+}
+
+export interface PublishAppReleaseInput {
+  version: string;
+  minSupportedVersion: string;
+  releaseNotesBn: string;
+  releaseNotesEn: string;
+  githubRepo: string;
+  releaseUrl: string;
+  apkDownloadUrl: string;
+  sha256Checksum: string;
+  isCriticalUpdate: boolean;
+  reason: string;
+}
+
+export async function adminPublishAppRelease(
+  input: PublishAppReleaseInput
+): Promise<void> {
+  const caller = auth.currentUser;
+  if (!caller || !caller.emailVerified) {
+    throw new Error('সুপার অ্যাডমিন সেশন যাচাই করা যায়নি।');
+  }
+
+  const version = normalizeSemVer(input.version);
+  const minSupportedVersion = normalizeSemVer(input.minSupportedVersion);
+  if (!version || !minSupportedVersion) {
+    throw new Error('সঠিক SemVer ফরম্যাটে ভার্সন লিখুন (যেমন: 1.1.0)।');
+  }
+
+  const githubRepo = input.githubRepo.trim();
+  if (githubRepo && !isValidGithubRepoSlug(githubRepo)) {
+    throw new Error('GitHub রিপোজিটরি ফরম্যাট সঠিক নয় (যেমন: username/roktodei)।');
+  }
+
+  const releaseUrl = input.releaseUrl.trim();
+  if (releaseUrl && !isTrustedGitHubUrl(releaseUrl)) {
+    throw new Error('নিরাপত্তা নীতি: Release URL অবশ্যই https://github.com/... লিংক হতে হবে।');
+  }
+
+  const apkDownloadUrl = input.apkDownloadUrl.trim();
+  if (apkDownloadUrl && !isTrustedGitHubUrl(apkDownloadUrl)) {
+    throw new Error('নিরাপত্তা নীতি: APK ডাউনলোড লিংক অবশ্যই https://github.com/... লিংক হতে হবে।');
+  }
+
+  const sha256Checksum = input.sha256Checksum.trim().toLowerCase();
+  if (sha256Checksum && !isValidSha256Hex(sha256Checksum)) {
+    throw new Error('SHA-256 চেকসামটি অবশ্যই সঠিক ৬৪-অক্ষরের হেক্সাডেসিমেল স্ট্রিং হতে হবে।');
+  }
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'appConfig', 'release'), {
+    version,
+    minSupportedVersion,
+    releaseNotesBn: sanitizePlainReleaseText(input.releaseNotesBn, 800),
+    releaseNotesEn: sanitizePlainReleaseText(input.releaseNotesEn, 800),
+    githubRepo,
+    releaseUrl,
+    apkDownloadUrl,
+    sha256Checksum,
+    isCriticalUpdate: Boolean(input.isCriticalUpdate),
+    publishedBy: caller.uid,
+    updatedAt: serverTimestamp(),
+  });
+
+  appendAuditToBatch(batch, {
+    action: 'publish_app_release',
+    targetType: 'app_config',
+    targetId: 'release',
+    reason: input.reason,
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'appConfig/release');
+  }
+}
+

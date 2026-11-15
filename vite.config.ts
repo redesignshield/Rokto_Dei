@@ -5,6 +5,13 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+const pkgJson = JSON.parse(
+  fs.readFileSync(path.resolve(import.meta.dirname, 'package.json'), 'utf-8')
+) as { version?: string };
+const APP_VERSION = pkgJson.version || '1.0.0';
+const APP_BUILD_TIME = new Date().toISOString();
+const GITHUB_REPO = (process.env.VITE_GITHUB_REPO || '').trim();
+
 function excludeDevArtifactsFromDist(): Plugin {
   return {
     name: 'exclude-aistudio-dev-artifacts',
@@ -18,13 +25,43 @@ function excludeDevArtifactsFromDist(): Plugin {
   };
 }
 
+function emitVersionManifest(): Plugin {
+  return {
+    name: 'emit-version-manifest',
+    apply: 'build',
+    closeBundle() {
+      const distDir = path.resolve(import.meta.dirname, 'dist');
+      if (!fs.existsSync(distDir)) {
+        fs.mkdirSync(distDir, { recursive: true });
+      }
+      fs.writeFileSync(
+        path.join(distDir, 'version.json'),
+        JSON.stringify(
+          {
+            version: APP_VERSION,
+            buildTime: APP_BUILD_TIME,
+            githubRepo: GITHUB_REPO,
+          },
+          null,
+          2
+        )
+      );
+    },
+  };
+}
+
 export default defineConfig(() => {
   return {
+    define: {
+      __APP_VERSION__: JSON.stringify(APP_VERSION),
+      __APP_BUILD_TIME__: JSON.stringify(APP_BUILD_TIME),
+      __GITHUB_REPO__: JSON.stringify(GITHUB_REPO),
+    },
     plugins: [
       react(),
       tailwindcss(),
       VitePWA({
-        registerType: 'autoUpdate',
+        registerType: 'prompt',
         includeAssets: [
           'logo.png',
           'apple-touch-icon.png',
@@ -68,9 +105,14 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
-          globIgnores: ['**/assets/aistudio/**'],
-          navigateFallbackDenylist: [/^\/api\//, /^\/\.well-known\//],
+          globIgnores: ['**/assets/aistudio/**', '**/version.json'],
+          navigateFallbackDenylist: [
+            /^\/api\//,
+            /^\/\.well-known\//,
+            /^\/version\.json$/,
+          ],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -107,6 +149,7 @@ export default defineConfig(() => {
         },
       }),
       excludeDevArtifactsFromDist(),
+      emitVersionManifest(),
     ],
     resolve: {
       alias: {

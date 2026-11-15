@@ -57,7 +57,8 @@ export type AuditActionType =
   | 'reopen_blood_request'
   | 'remove_donation_record'
   | 'grant_moderator'
-  | 'revoke_moderator';
+  | 'revoke_moderator'
+  | 'publish_app_release';
 
 export interface UserProfile {
   uid: string;
@@ -231,10 +232,25 @@ export interface AuditLogRecord {
     | 'report'
     | 'blood_request'
     | 'donation_record'
-    | 'admin_role';
+    | 'admin_role'
+    | 'app_config';
   targetId: string;
   reason: string;
   createdAt: Timestamp | null;
+}
+
+export interface AppReleaseConfig {
+  version: string;
+  minSupportedVersion: string;
+  releaseNotesBn: string;
+  releaseNotesEn: string;
+  githubRepo: string;
+  releaseUrl: string;
+  apkDownloadUrl: string;
+  sha256Checksum: string;
+  isCriticalUpdate: boolean;
+  publishedBy: string;
+  updatedAt: Timestamp | null;
 }
 
 export type NotificationType =

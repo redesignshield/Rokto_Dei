@@ -8,6 +8,7 @@ import {
   Lock,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Trash2,
   UserX,
   X,
@@ -17,6 +18,7 @@ import {
   type AppNotification,
   useNotifications,
 } from '../contexts/NotificationContext';
+import { useAppUpdate } from '../contexts/UpdateContext';
 import type { AppView } from '../types';
 
 interface NotificationPanelProps {
@@ -44,6 +46,7 @@ export function NotificationPanel({
     deleteNotification,
     clearAll,
   } = useNotifications();
+  const { openUpdateModal, availableUpdate } = useAppUpdate();
   const [tab, setTab] = useState<'all' | 'unread'>('all');
 
   if (!isOpen) return null;
@@ -55,6 +58,15 @@ export function NotificationPanel({
 
   const handleItemClick = (item: AppNotification) => {
     markAsRead(item.id);
+    if (item.metadata?.isAppUpdate || item.id.startsWith('notif_app_update_')) {
+      onClose();
+      if (availableUpdate) {
+        openUpdateModal();
+      } else if (item.targetView) {
+        onNavigate(item.targetView);
+      }
+      return;
+    }
     if (item.targetView) {
       onNavigate(
         item.targetView,
@@ -66,8 +78,11 @@ export function NotificationPanel({
     onClose();
   };
 
-  const getIcon = (type: AppNotification['type']) => {
-    switch (type) {
+  const getIcon = (item: AppNotification) => {
+    if (item.metadata?.isAppUpdate || item.id.startsWith('notif_app_update_')) {
+      return <Sparkles className="w-4 h-4 text-[#C80828]" />;
+    }
+    switch (item.type) {
       case 'emergency_alert':
         return <Droplets className="w-4 h-4 text-[#C80828]" />;
       case 'pledge_received':
@@ -254,7 +269,7 @@ export function NotificationPanel({
                   }`}
                 >
                   <div className="w-8 h-8 rounded-xl bg-neutral-100 flex items-center justify-center shrink-0 mt-0.5">
-                    {getIcon(item.type)}
+                    {getIcon(item)}
                   </div>
 
                   <div className="flex-1 min-w-0 space-y-1">

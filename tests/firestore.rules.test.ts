@@ -8,18 +8,6 @@ import {
   isValidLocationHierarchy,
 } from '../src/data/bdLocations';
 import {
-  DEMO_BLOOD_REQUESTS,
-  DEMO_CONTACT_LOGS,
-  DEMO_DONATION_RECORDS,
-  DEMO_DONOR_PHONES,
-  DEMO_DONORS,
-  DEMO_REQUEST_PHONES,
-  DEMO_REQUEST_PLEDGES,
-  filterAndMergeBloodRequests,
-  filterAndMergeDonors,
-  isDemoRecordId,
-} from '../src/data/removableDemoData';
-import {
   BLOOD_GROUPS,
   buildContactDeepLink,
   codePointLength,
@@ -30,6 +18,11 @@ import {
   sanitizeText,
   SCHEMA_LIMITS,
 } from '../src/lib/validation';
+import {
+  compareSemVer,
+  isTrustedGitHubUrl,
+  isValidSha256Hex,
+} from '../src/lib/appVersion';
 
 const rulesPath = path.resolve(__dirname, '../firestore.rules');
 const blueprintPath = path.resolve(__dirname, '../firebase-blueprint.json');
@@ -105,6 +98,7 @@ describe('Rokto Dei — Validation, Locations, Deep Links, Booking Lock & Securi
       '/auditLogs/{logId}',
       '/notifications/{notificationId}',
       '/usernames/{usernameLower}',
+      '/appConfig/{configId}',
     ];
 
     for (const colPath of expectedPaths) {
@@ -167,84 +161,17 @@ describe('Rokto Dei — Validation, Locations, Deep Links, Booking Lock & Securi
     expect(rulesContent).toContain('^\\\\+8801[3-9][0-9]{8}$');
   });
 
-  it('validates removable demo donors, booked blood requests, donation history records, pledges, and contact logs', () => {
-    expect(DEMO_DONORS.length).toBeGreaterThanOrEqual(20);
-    expect(DEMO_BLOOD_REQUESTS.length).toBeGreaterThanOrEqual(8);
-    expect(DEMO_DONATION_RECORDS.length).toBeGreaterThanOrEqual(4);
-    expect(DEMO_REQUEST_PLEDGES.length).toBeGreaterThanOrEqual(2);
-    expect(DEMO_CONTACT_LOGS.length).toBeGreaterThanOrEqual(2);
-
-    // Every one of the 8 blood groups is covered by demo donors
-    for (const bg of BLOOD_GROUPS) {
-      expect(DEMO_DONORS.some((d) => d.bloodGroup === bg)).toBe(true);
-    }
-
-    for (const donor of DEMO_DONORS) {
-      expect(isDemoRecordId(donor.uid)).toBe(true);
-      expect(donor.totalDonationsCount).toBeGreaterThanOrEqual(1);
-      expect(
-        isValidLocationHierarchy(
-          donor.divisionId,
-          donor.districtId,
-          donor.upazilaId
-        )
-      ).toBe(true);
-      const phone = DEMO_DONOR_PHONES[donor.uid];
-      expect(phone).toBeDefined();
-      expect(normalizeBdPhone(phone)).toBe(phone);
-    }
-
-    for (const req of DEMO_BLOOD_REQUESTS) {
-      expect(isDemoRecordId(req.id)).toBe(true);
-      expect(
-        isValidLocationHierarchy(req.divisionId, req.districtId, req.upazilaId)
-      ).toBe(true);
-      const phone = DEMO_REQUEST_PHONES[req.id];
-      expect(phone).toBeDefined();
-      expect(normalizeBdPhone(phone)).toBe(phone);
-    }
-
-    // Verify booked request filter separation ('open_only' vs 'booked_only' vs 'active_all')
-    const bookedOnly = filterAndMergeBloodRequests({
-      realRequests: [],
-      statusFilter: 'booked_only',
-      includeDemo: true,
-    });
-    expect(bookedOnly.length).toBeGreaterThanOrEqual(2);
-    expect(bookedOnly.every((r) => r.status === 'booked')).toBe(true);
-    expect(bookedOnly.every((r) => Boolean(r.bookedDonorName))).toBe(true);
-
-    const openOnly = filterAndMergeBloodRequests({
-      realRequests: [],
-      statusFilter: 'open_only',
-      includeDemo: true,
-    });
-    expect(openOnly.every((r) => r.status === 'open')).toBe(true);
-
-    for (const rec of DEMO_DONATION_RECORDS) {
-      expect(isDemoRecordId(rec.id)).toBe(true);
-      expect(rec.volumeMl).toBeGreaterThanOrEqual(150);
-      expect(
-        isValidLocationHierarchy(rec.divisionId, rec.districtId, rec.upazilaId)
-      ).toBe(true);
-    }
-
-    // Verify honest separate counts (totalListedCount vs availableCount) and toggle-off behavior
-    const oPosAll = filterAndMergeDonors({
-      realDonors: [],
-      bloodGroup: 'O+',
-      includeDemo: true,
-    });
-    expect(oPosAll.totalListedCount).toBe(7);
-    expect(oPosAll.availableCount).toBe(5);
-
-    const toggledOff = filterAndMergeDonors({
-      realDonors: [],
-      bloodGroup: 'O+',
-      includeDemo: false,
-    });
-    expect(toggledOff.totalListedCount).toBe(0);
-    expect(toggledOff.donors).toHaveLength(0);
+  it('covers all 8 standard blood groups in validation schema', () => {
+    expect(BLOOD_GROUPS).toEqual([
+      'A+',
+      'A-',
+      'B+',
+      'B-',
+      'AB+',
+      'AB-',
+      'O+',
+      'O-',
+    ]);
   });
 
   it('validates unique username formatting, lowercase normalization, and security rules registration constraints', () => {
@@ -270,5 +197,58 @@ describe('Rokto Dei — Validation, Locations, Deep Links, Booking Lock & Securi
     expect(rulesContent).toContain('isValidUsernameReservation(incoming(), usernameLower)');
     expect(rulesContent).toContain('incoming().uid == request.auth.uid');
     expect(rulesContent).toContain('data.usernameLower == usernameLower');
+  });
+
+  it('enforces SemVer anti-downgrade guard, GitHub URL pinning, and /appConfig/release security rules', () => {
+    // 1. SemVer anti-downgrade comparison
+    expect(compareSemVer('1.1.0', '1.0.0')).toBe(1);
+    expect(compareSemVer('1.0.10', '1.0.2')).toBe(1);
+    expect(compareSemVer('v1.0.0', '1.0.0')).toBe(0);
+    expect(compareSemVer('0.9.9', '1.0.0')).toBe(-1);
+    expect(compareSemVer('invalid', '1.0.0')).toBe(0);
+
+    // 2. Strict GitHub URL allowlist & optional repo pinning
+    expect(
+      isTrustedGitHubUrl(
+        'https://github.com/roktodei/app/releases/download/v1.1.0/RoktoDei-v1.1.0.apk',
+        'roktodei/app'
+      )
+    ).toBe(true);
+    expect(
+      isTrustedGitHubUrl(
+        'http://github.com/roktodei/app/releases/latest',
+        'roktodei/app'
+      )
+    ).toBe(false);
+    expect(
+      isTrustedGitHubUrl('https://evil.example.com/app.apk', 'roktodei/app')
+    ).toBe(false);
+    expect(
+      isTrustedGitHubUrl(
+        'https://user:pass@github.com/roktodei/app/releases/latest'
+      )
+    ).toBe(false);
+    expect(
+      isTrustedGitHubUrl(
+        'https://github.com/other/repo/releases/latest',
+        'roktodei/app'
+      )
+    ).toBe(false);
+
+    // 3. SHA-256 checksum validation
+    expect(isValidSha256Hex('a'.repeat(64))).toBe(true);
+    expect(isValidSha256Hex('g'.repeat(64))).toBe(false);
+    expect(isValidSha256Hex('abc123')).toBe(false);
+
+    // 4. Firestore rules enforcement for /appConfig/release
+    const appConfigBlock =
+      rulesContent.split('match /appConfig/{configId}')[1]?.split('match /')[0] ||
+      '';
+    expect(appConfigBlock).toContain("allow get: if configId == 'release';");
+    expect(appConfigBlock).toContain('allow list: if false;');
+    expect(appConfigBlock).toContain('isBootstrappedAdmin()');
+    expect(appConfigBlock).toContain('allow delete: if false;');
+    expect(rulesContent).toContain("'publish_app_release'");
+    expect(rulesContent).toContain('isTrustedReleaseUrl(');
   });
 });

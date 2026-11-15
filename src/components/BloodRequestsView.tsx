@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Timestamp } from 'firebase/firestore';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -15,19 +14,12 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { useNotifications } from '../contexts/NotificationContext';
 import {
   DIVISIONS,
   formatLocationLabel,
   getDistrictsByDivision,
   getUpazilasByDistrict,
 } from '../data/bdLocations';
-import {
-  DEMO_REQUEST_PHONES,
-  DEMO_REQUEST_PLEDGES,
-  filterAndMergeBloodRequests,
-  isDemoRecordId,
-} from '../data/removableDemoData';
 import {
   contactMethodLabel,
   formatTimestamp,
@@ -59,7 +51,6 @@ import type {
   RequestPledge,
 } from '../types';
 import { ContactResolutionModal } from './ContactResolutionModal';
-import { DemoPreviewBanner } from './DemoPreviewBanner';
 import { DonorProfileModal, type PledgeBookingContext } from './DonorProfileModal';
 import { DonationCareIllustration } from './MedicalIllustrations';
 import { ReportModal } from './ReportModal';
@@ -88,12 +79,8 @@ export function BloodRequestsView({
     ownDonor,
     ownDonorPhone,
     lang,
-    demoMode,
   } = useAuth();
-  const { addNotification } = useNotifications();
-  const canViewRequests = Boolean(
-    (firebaseUser && isEmailVerified) || demoMode
-  );
+  const canViewRequests = Boolean(firebaseUser && isEmailVerified);
 
   const [subTab, setSubTab] = useState<'all' | 'mine'>('all');
   const [statusFilter, setStatusFilter] = useState<
@@ -107,13 +94,6 @@ export function BloodRequestsView({
   const [ownerIncomingPledges, setOwnerIncomingPledges] = useState<
     RequestPledge[]
   >([]);
-
-  // Local interactive preview overrides for demo requests (never touches live Firestore)
-  const [demoRequestOverrides, setDemoRequestOverrides] = useState<
-    Record<string, Partial<BloodRequest>>
-  >({});
-  const [demoLocalPledges, setDemoLocalPledges] =
-    useState<RequestPledge[]>(DEMO_REQUEST_PLEDGES);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -192,50 +172,33 @@ export function BloodRequestsView({
 
   const loadRequests = useCallback(async () => {
     const hasVerifiedSession = Boolean(firebaseUser && isEmailVerified);
-    if (!hasVerifiedSession && !demoMode) {
+    if (!hasVerifiedSession || !firebaseUser) {
       setRequests([]);
+      setMySentPledges([]);
+      setOwnerIncomingPledges([]);
       return;
     }
 
     setLoading(true);
     setError(null);
     try {
-      if (hasVerifiedSession && firebaseUser) {
-        const [outPledges, inPledges] = await Promise.all([
-          listMyDonorPledges(firebaseUser.uid).catch(() => []),
-          listPledgesForMyRequests(firebaseUser.uid).catch(() => []),
-        ]);
-        setMySentPledges(outPledges);
-        setOwnerIncomingPledges(inPledges);
-      } else {
-        setMySentPledges([]);
-        setOwnerIncomingPledges([]);
-      }
+      const [outPledges, inPledges] = await Promise.all([
+        listMyDonorPledges(firebaseUser.uid).catch(() => []),
+        listPledgesForMyRequests(firebaseUser.uid).catch(() => []),
+      ]);
+      setMySentPledges(outPledges);
+      setOwnerIncomingPledges(inPledges);
 
       if (subTab === 'mine') {
-        if (!firebaseUser || !isEmailVerified) {
-          setRequests([]);
-        } else {
-          const mine = await listMyBloodRequests(firebaseUser.uid);
-          setRequests(mine);
-        }
+        const mine = await listMyBloodRequests(firebaseUser.uid);
+        setRequests(mine);
       } else {
-        let liveActiveList: BloodRequest[] = [];
-        if (hasVerifiedSession) {
-          liveActiveList = await listOpenBloodRequests({
-            bloodGroup: filterGroup,
-            divisionId: filterDivision || undefined,
-            statusFilter,
-          });
-        }
-        const merged = filterAndMergeBloodRequests({
-          realRequests: liveActiveList,
+        const liveActiveList = await listOpenBloodRequests({
           bloodGroup: filterGroup,
           divisionId: filterDivision || undefined,
           statusFilter,
-          includeDemo: demoMode,
         });
-        setRequests(merged);
+        setRequests(liveActiveList);
       }
     } catch (err) {
       setError(
@@ -249,7 +212,6 @@ export function BloodRequestsView({
   }, [
     firebaseUser,
     isEmailVerified,
-    demoMode,
     subTab,
     statusFilter,
     filterGroup,
@@ -260,18 +222,7 @@ export function BloodRequestsView({
     loadRequests();
   }, [loadRequests]);
 
-  // Apply local demo overrides so user can test booking/reopening demo cards live without touching Firestore
-  const displayedRequests = requests
-    .map((req) =>
-      isDemoRecordId(req.id) && demoRequestOverrides[req.id]
-        ? ({ ...req, ...demoRequestOverrides[req.id] } as BloodRequest)
-        : req
-    )
-    .filter((req) => {
-      if (subTab === 'mine') return true;
-      if (statusFilter === 'open_only') return req.status === 'open';
-      if (statusFilter === 'booked_only') return req.status === 'booked';
-    });
+  const displayedRequests = requests;
 
   // Full Request Detail Modal state & back button handling
   const [selectedRequest, setSelectedRequest] = useState<BloodRequest | null>(
@@ -369,66 +320,6 @@ export function BloodRequestsView({
       setSuccessNotice(null);
 
       try {
-        const prevFulfilled = targetReq.fulfilledUnits || 0;
-        const newFulfilled = prevFulfilled + unitsToBook;
-        const isFullySatisfied = newFulfilled >= targetReq.units;
-        const newStatus = isFullySatisfied ? 'booked' : 'open';
-
-        const newBookedSummary: BookedDonorSummary = {
-          donorUid: donor.uid,
-          donorName: donor.displayName,
-          donorBloodGroup: donor.bloodGroup,
-          units: unitsToBook,
-          bookedAt: Timestamp.now(),
-        };
-
-        if (isDemoRecordId(targetReq.id)) {
-          setDemoRequestOverrides((prev) => ({
-            ...prev,
-            [targetReq.id]: {
-              fulfilledUnits: newFulfilled,
-              status: newStatus,
-              bookedDonorUid: donor.uid,
-              bookedDonorName: donor.displayName,
-              bookedAt: Timestamp.now(),
-              updatedAt: Timestamp.now(),
-              bookedDonors: [
-                ...(targetReq.bookedDonors || []),
-                newBookedSummary,
-              ],
-            },
-          }));
-
-          if (selectedDonorPledgeContext.pledgeId) {
-            setDemoLocalPledges((prev) =>
-              prev.map((p) =>
-                p.id === selectedDonorPledgeContext?.pledgeId
-                  ? { ...p, status: 'accepted' }
-                  : p
-              )
-            );
-          }
-
-          setIsDonorModalOpen(false);
-          onClearTargetDonor?.();
-
-          if (isFullySatisfied) {
-            setSuccessNotice(
-              lang === 'bn'
-                ? `অভিনন্দন! আপনার প্রয়োজনীয় সব রক্ত (${targetReq.units} ব্যাগ) নিশ্চিত হয়েছে। অনুরোধটি সফলভাবে বুকড করা হয়েছে এবং নতুন কল বন্ধ করা হয়েছে।`
-                : `All ${targetReq.units} bags confirmed! Request is now booked and calls are locked.`
-            );
-          } else {
-            const remaining = targetReq.units - newFulfilled;
-            setSuccessNotice(
-              lang === 'bn'
-                ? `${donor.displayName} কে ${unitsToBook} ব্যাগের জন্য নিশ্চিত করা হয়েছে! এখনও ${remaining} ব্যাগ রক্ত প্রয়োজন থাকায় অনুরোধটি চালু আছে ও কল সচল রয়েছে।`
-                : `${donor.displayName} confirmed for ${unitsToBook} bag(s). ${remaining} bag(s) still needed; calls remain active.`
-            );
-          }
-          return;
-        }
-
         // Live Firestore request
         await bookBloodRequestDonor({
           requestId: targetReq.id,
@@ -556,14 +447,13 @@ export function BloodRequestsView({
   };
 
   const openPledgeDialog = (reqItem: BloodRequest) => {
-    if (!firebaseUser && !isDemoRecordId(reqItem.id)) {
+    if (!firebaseUser) {
       onOpenAuth();
       return;
     }
     const isOwner = Boolean(
-      firebaseUser &&
-        (reqItem.createdBy === firebaseUser.uid ||
-          reqItem.createdBy === firebaseUser.email)
+      firebaseUser.uid === reqItem.createdBy ||
+        firebaseUser.email === reqItem.createdBy
     );
     if (isOwner) {
       setError(
@@ -577,8 +467,8 @@ export function BloodRequestsView({
     setPledgeDonorName(
       ownDonor?.displayName ||
         userProfile?.fullName ||
-        firebaseUser?.displayName ||
-        (isDemoRecordId(reqItem.id) ? 'পরীক্ষামূলক ডোনার (ডেমো)' : '')
+        firebaseUser.displayName ||
+        ''
     );
     setPledgeBloodGroup(ownDonor?.bloodGroup || reqItem.bloodGroup);
     setPledgeMessage(
@@ -595,50 +485,6 @@ export function BloodRequestsView({
     setError(null);
     setSuccessNotice(null);
     try {
-      if (isDemoRecordId(pledgeTargetReq.id)) {
-        const newDemoPledge: RequestPledge = {
-          id: `demo_pledge_${Date.now()}`,
-          requestId: pledgeTargetReq.id,
-          requestCreatorUid: pledgeTargetReq.createdBy,
-          hospitalName: pledgeTargetReq.hospitalName,
-          donorUid: firebaseUser?.uid || 'demo_tester_donor',
-          donorName: pledgeDonorName || 'পরীক্ষামূলক ডোনার',
-          donorBloodGroup: pledgeBloodGroup,
-          units: pledgeUnits || 1,
-          message: pledgeMessage,
-          status: 'offered',
-          createdAt: Timestamp.now(),
-          updatedAt: Timestamp.now(),
-        };
-        setDemoLocalPledges((prev) => [newDemoPledge, ...prev]);
-        addNotification({
-          type: 'pledge_received',
-          titleBn: `নতুন রক্তদাতা ${pledgeUnits} ব্যাগ রক্ত দিতে আগ্রহী!`,
-          titleEn: `Donor Offered ${pledgeUnits} Bag(s) of Blood!`,
-          messageBn: `${pledgeDonorName || 'পরীক্ষামূলক রক্তদাতা'} (${pledgeBloodGroup}) আপনার "${pledgeTargetReq.hospitalName}"-এর অনুরোধে ${pledgeUnits} ব্যাগ রক্ত দিতে সম্মতি জানিয়েছেন। ডোনারের প্রোফাইল দেখতে ক্লিক করুন।`,
-          messageEn: `${pledgeDonorName || 'Donor'} (${pledgeBloodGroup}) offered ${pledgeUnits} bag(s) for your request. Click to view profile.`,
-          targetView: 'blood_requests',
-          targetId: pledgeTargetReq.id,
-          targetDonorUid: firebaseUser?.uid || 'demo_donor_01',
-          urgency: 'urgent',
-          metadata: {
-            donorName: pledgeDonorName || 'পরীক্ষামূলক রক্তদাতা',
-            donorUid: firebaseUser?.uid || 'demo_donor_01',
-            bloodGroup: pledgeBloodGroup,
-            hospitalName: pledgeTargetReq.hospitalName,
-            requestId: pledgeTargetReq.id,
-            units: pledgeUnits,
-          },
-        });
-        setPledgeTargetReq(null);
-        setSuccessNotice(
-          lang === 'bn'
-            ? `আপনার ${pledgeUnits} ব্যাগ রক্তদানের সম্মতি যুক্ত হয়েছে। রোগীর পরিবার এটি নিশ্চিত করতে পারবেন।`
-            : `Your offer to donate ${pledgeUnits} bag(s) has been recorded.`
-        );
-        return;
-      }
-
       await submitRequestPledge({
         request: pledgeTargetReq,
         donorName: pledgeDonorName,
@@ -684,50 +530,6 @@ export function BloodRequestsView({
     setSuccessNotice(null);
 
     try {
-      if (isDemoRecordId(bookingTargetReq.id)) {
-        setDemoRequestOverrides((prev) => ({
-          ...prev,
-          [bookingTargetReq.id]: {
-            status: 'booked',
-            bookedDonorUid: bookingDonorUid,
-            bookedDonorName: bookingDonorName.trim(),
-            bookingNote: bookingNote.trim(),
-            bookedAt: Timestamp.now(),
-            updatedAt: Timestamp.now(),
-          },
-        }));
-        if (bookingAcceptedPledgeId) {
-          setDemoLocalPledges((prev) =>
-            prev.map((p) =>
-              p.requestId === bookingTargetReq.id
-                ? {
-                    ...p,
-                    status:
-                      p.id === bookingAcceptedPledgeId ? 'accepted' : 'declined',
-                  }
-                : p
-            )
-          );
-        }
-        addNotification({
-          type: 'donor_booked',
-          titleBn: 'ডোনার বুকড — নতুন কল বন্ধ করা হয়েছে 🔒',
-          titleEn: 'Donor Booked — Calls Locked 🔒',
-          messageBn: `${bookingDonorName.trim() || 'রক্তদাতা'} কে চূড়ান্ত ডোনার হিসেবে বুক করা হয়েছে। নতুন কল বন্ধ রাখতে অনুরোধের যোগাযোগ নম্বর লক করা হয়েছে।`,
-          messageEn: `${bookingDonorName.trim() || 'Donor'} has been booked. Contact info is locked against new calls.`,
-          targetView: 'blood_requests',
-          targetId: bookingTargetReq.id,
-          urgency: 'urgent',
-        });
-        setBookingTargetReq(null);
-        setSuccessNotice(
-          lang === 'bn'
-            ? 'ডেমো বুকিং সম্পন্ন! দেখুন—এই কার্ডে কল/মেসেজ বাটন লক হয়ে গেছে যেন কেউ আর বিরক্ত করতে না পারে।'
-            : 'Demo Booking Complete! Contact buttons are now locked.'
-        );
-        return;
-      }
-
       const otherOfferedIds = ownerIncomingPledges
         .filter(
           (p) =>
@@ -762,25 +564,6 @@ export function BloodRequestsView({
   const handleReopenRequest = async (reqItem: BloodRequest) => {
     setError(null);
     setSuccessNotice(null);
-    if (isDemoRecordId(reqItem.id)) {
-      setDemoRequestOverrides((prev) => ({
-        ...prev,
-        [reqItem.id]: {
-          status: 'open',
-          bookedDonorUid: '',
-          bookedDonorName: '',
-          bookingNote: '',
-          bookedAt: null,
-          updatedAt: Timestamp.now(),
-        },
-      }));
-      setSuccessNotice(
-        lang === 'bn'
-          ? 'ডেমো অনুরোধটি আবার ওপেন করা হয়েছে—এখন কল বাটন পুনরায় সচল হয়েছে।'
-          : 'Demo request re-opened for calls.'
-      );
-      return;
-    }
 
     try {
       await reopenBookedBloodRequest(reqItem.id);
@@ -803,21 +586,6 @@ export function BloodRequestsView({
   ) => {
     setError(null);
     setSuccessNotice(null);
-    if (isDemoRecordId(reqItem.id)) {
-      setDemoRequestOverrides((prev) => ({
-        ...prev,
-        [reqItem.id]: {
-          status,
-          updatedAt: Timestamp.now(),
-        },
-      }));
-      setSuccessNotice(
-        lang === 'bn'
-          ? 'ডেমো অনুরোধের স্ট্যাটাস আপডেট করা হয়েছে।'
-          : 'Demo request status updated.'
-      );
-      return;
-    }
 
     try {
       await closeOwnBloodRequest(reqItem.id, status);
@@ -839,17 +607,6 @@ export function BloodRequestsView({
           ? 'এই অনুরোধটিতে ডোনার বুকড থাকায় নতুন কল বন্ধ রাখা হয়েছে।'
           : 'Calls are paused because a donor is already booked for this request.'
       );
-      return;
-    }
-
-    if (isDemoRecordId(reqItem.id)) {
-      setError(null);
-      setContactModalData({
-        personName: reqItem.requesterName,
-        bloodGroup: reqItem.bloodGroup,
-        selectedMethod: method,
-        phoneNumber: DEMO_REQUEST_PHONES[reqItem.id] || '+8801700000201',
-      });
       return;
     }
 
@@ -922,7 +679,6 @@ export function BloodRequestsView({
       </section>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
-        <DemoPreviewBanner />
 
         {!canViewRequests ? (
           <div className="bg-white rounded-3xl border border-neutral-200/80 p-8 sm:p-12 text-center max-w-2xl mx-auto flex flex-col items-center space-y-4">
@@ -1114,30 +870,18 @@ export function BloodRequestsView({
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 {displayedRequests.map((reqItem) => {
-                  const isDemo = isDemoRecordId(reqItem.id);
                   const isOwner = Boolean(
                     firebaseUser &&
                       (reqItem.createdBy === firebaseUser.uid ||
                         reqItem.createdBy === firebaseUser.email)
                   );
-                  const canManageBooking = isOwner || (demoMode && isDemo);
+                  const canManageBooking = isOwner;
 
-                  const myPledge = isDemo
-                    ? demoLocalPledges.find(
-                        (p) =>
-                          p.requestId === reqItem.id &&
-                          p.donorUid ===
-                            (firebaseUser?.uid || 'demo_tester_donor')
-                      )
-                    : mySentPledges.find((p) => p.requestId === reqItem.id);
+                  const myPledge = mySentPledges.find(
+                    (p) => p.requestId === reqItem.id
+                  );
 
-                  const cardPledges = isDemo
-                    ? demoLocalPledges.filter(
-                        (p) =>
-                          p.requestId === reqItem.id &&
-                          p.status !== 'withdrawn'
-                      )
-                    : isOwner
+                  const cardPledges = isOwner
                     ? ownerIncomingPledges.filter(
                         (p) =>
                           p.requestId === reqItem.id &&
@@ -1301,28 +1045,15 @@ export function BloodRequestsView({
       {/* Full Request Details & Contact Modal (Opened when clicking card / notification) */}
       {currentSelectedRequest && (() => {
         const reqItem = currentSelectedRequest;
-        const isDemo = isDemoRecordId(reqItem.id);
         const isOwner = Boolean(
           firebaseUser &&
             (reqItem.createdBy === firebaseUser.uid ||
               reqItem.createdBy === firebaseUser.email)
         );
-        const canManageBooking = isOwner || (demoMode && isDemo);
-        const myPledge = isDemo
-          ? demoLocalPledges.find(
-              (p) =>
-                p.requestId === reqItem.id &&
-                p.donorUid === (firebaseUser?.uid || 'demo_tester_donor')
-            )
-          : mySentPledges.find((p) => p.requestId === reqItem.id);
+        const canManageBooking = isOwner;
+        const myPledge = mySentPledges.find((p) => p.requestId === reqItem.id);
 
-        const cardPledges = isDemo
-          ? demoLocalPledges.filter(
-              (p) =>
-                p.requestId === reqItem.id &&
-                p.status !== 'withdrawn'
-            )
-          : isOwner
+        const cardPledges = isOwner
           ? ownerIncomingPledges.filter(
               (p) =>
                 p.requestId === reqItem.id &&
@@ -1364,7 +1095,7 @@ export function BloodRequestsView({
                     <button
                       type="button"
                       onClick={() => {
-                        if (!firebaseUser && !isDemo) {
+                        if (!firebaseUser) {
                           onOpenAuth();
                           return;
                         }

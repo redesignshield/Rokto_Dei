@@ -12,12 +12,24 @@ const __dirname = path.dirname(__filename);
 
 interface FirebaseClientConfig {
   projectId: string;
+  apiKey?: string;
 }
 
 const configPath = path.join(__dirname, 'firebase-applet-config.json');
 const firebaseConfig: FirebaseClientConfig = JSON.parse(
   fs.readFileSync(configPath, 'utf-8')
 );
+const pkgPath = path.join(__dirname, 'package.json');
+const serverPackageVersion = (() => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+      version?: string;
+    };
+    return parsed.version || '1.0.0';
+  } catch {
+    return '1.0.0';
+  }
+})();
 
 const FIREBASE_PROJECT_ID = firebaseConfig.projectId;
 const FIREBASE_ISSUER = `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`;
@@ -39,6 +51,37 @@ interface LookupRecord {
 
 // Sliding-window rate-limit store keyed by verified Firebase UID (metadata only, never phone numbers)
 const userContactLookups = new Map<string, LookupRecord[]>();
+
+interface GeocodeCacheEntry {
+  formattedAddress: string;
+  areaLabel: string;
+  source: 'google_geocoding' | 'fallback';
+  expiresAt: number;
+}
+
+// Transient in-memory deduplication cache (5 min TTL) to prevent GPS jitter from burning quota
+const reverseGeocodeCache = new Map<string, GeocodeCacheEntry>();
+const GEOCODE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function formatCoordFallback(lat: number, lng: number, lang: 'bn' | 'en'): {
+  formattedAddress: string;
+  areaLabel: string;
+} {
+  const latStr = lat.toFixed(4);
+  const lngStr = lng.toFixed(4);
+  if (lang === 'bn') {
+    const bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+    const toBn = (s: string) => s.replace(/[0-9]/g, (d) => bnDigits[Number(d)]);
+    return {
+      formattedAddress: `অবস্থান (${toBn(latStr)}, ${toBn(lngStr)})`,
+      areaLabel: 'বর্তমান জিপিএস অবস্থান',
+    };
+  }
+  return {
+    formattedAddress: `Location (${latStr}, ${lngStr})`,
+    areaLabel: 'Current GPS Location',
+  };
+}
 
 function pruneAndEvaluateQuota(uid: string, targetKey?: string): {
   allowed: boolean;
@@ -213,7 +256,240 @@ async function startServer() {
   });
 
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok' });
+    res.json({ status: 'ok', version: serverPackageVersion });
+  });
+
+  app.get('/version.json', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    const distVersionPath = path.join(__dirname, 'dist', 'version.json');
+    if (process.env.NODE_ENV === 'production' && fs.existsSync(distVersionPath)) {
+      res.type('application/json').sendFile(distVersionPath);
+      return;
+    }
+    res.json({
+      version: serverPackageVersion,
+      buildTime: new Date().toISOString(),
+      githubRepo: (process.env.VITE_GITHUB_REPO || '').trim(),
+    });
+  });
+
+  // Server-side Reverse Geocoding proxy (CF1 compliant: keeps API key off REST URLs & avoids browser CORS issues)
+  app.get('/api/reverse-geocode', async (req: Request, res: Response) => {
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+    const lang = req.query.lang === 'en' ? 'en' : 'bn';
+
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      res.status(400).json({
+        code: 'INVALID_ARGUMENT',
+        message: 'সঠিক অক্ষাংশ ও দ্রাঘিমাংশ প্রদান করুন।',
+      });
+      return;
+    }
+
+    const cacheKey = `${lat.toFixed(3)},${lng.toFixed(3)},${lang}`;
+    const cached = reverseGeocodeCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      res.json({
+        formattedAddress: cached.formattedAddress,
+        areaLabel: cached.areaLabel,
+        source: cached.source,
+      });
+      return;
+    }
+
+    const mapsApiKey =
+      process.env.GOOGLE_MAPS_API_KEY ||
+      process.env.VITE_GOOGLE_MAPS_API_KEY ||
+      firebaseConfig.apiKey ||
+      '';
+
+    if (!mapsApiKey) {
+      const fb = formatCoordFallback(lat, lng, lang);
+      res.json({ ...fb, source: 'fallback' });
+      return;
+    }
+
+    try {
+      // 1. Primary: Modern Google Maps Geocoding API v4 REST endpoint
+      const v4Url = new URL(
+        'https://geocode.googleapis.com/v4/geocode/location'
+      );
+      v4Url.searchParams.set('location.latitude', String(lat));
+      v4Url.searchParams.set('location.longitude', String(lng));
+      v4Url.searchParams.set('languageCode', lang);
+      v4Url.searchParams.set('regionCode', 'BD');
+
+      const v4Res = await fetch(v4Url.toString(), {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': mapsApiKey,
+          'X-Goog-FieldMask':
+            'results.placeId,results.formattedAddress,results.addressComponents,plusCode',
+          'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+        },
+      });
+
+      if (v4Res.status === 429) {
+        res.status(429).json({
+          code: 'RESOURCE_EXHAUSTED',
+          error: { status: 'RESOURCE_EXHAUSTED' },
+        });
+        return;
+      }
+
+      if (v4Res.ok) {
+        const v4Data = (await v4Res.json()) as {
+          error?: { status?: string };
+          results?: Array<{
+            formattedAddress?: string;
+            addressComponents?: Array<{
+              longText?: string;
+              shortText?: string;
+              types?: string[];
+            }>;
+          }>;
+        };
+
+        if (v4Data.error?.status === 'RESOURCE_EXHAUSTED') {
+          res.status(429).json({
+            code: 'RESOURCE_EXHAUSTED',
+            error: { status: 'RESOURCE_EXHAUSTED' },
+          });
+          return;
+        }
+
+        const firstResult = v4Data.results?.[0];
+        const formattedAddress = firstResult?.formattedAddress?.trim();
+        if (formattedAddress) {
+          const components = firstResult?.addressComponents || [];
+          const pickComponent = (types: string[]) =>
+            components.find((c) => c.types?.some((t) => types.includes(t)))
+              ?.longText || '';
+          const sublocality = pickComponent([
+            'sublocality_level_1',
+            'sublocality',
+            'neighborhood',
+            'route',
+          ]);
+          const locality = pickComponent([
+            'locality',
+            'administrative_area_level_2',
+          ]);
+          const areaLabel =
+            [sublocality, locality].filter(Boolean).join(', ') ||
+            formattedAddress;
+
+          if (reverseGeocodeCache.size >= 200) {
+            reverseGeocodeCache.clear();
+          }
+          reverseGeocodeCache.set(cacheKey, {
+            formattedAddress,
+            areaLabel,
+            source: 'google_geocoding',
+            expiresAt: Date.now() + GEOCODE_CACHE_TTL_MS,
+          });
+          res.json({
+            formattedAddress,
+            areaLabel,
+            source: 'google_geocoding',
+          });
+          return;
+        }
+      }
+
+      // 2. Fallback REST endpoint: standard Geocoding REST API if v4 is unavailable on project key
+      const legacyUrl = new URL(
+        'https://maps.googleapis.com/maps/api/geocode/json'
+      );
+      legacyUrl.searchParams.set('latlng', `${lat},${lng}`);
+      legacyUrl.searchParams.set('language', lang);
+      legacyUrl.searchParams.set('region', 'bd');
+      legacyUrl.searchParams.set('key', mapsApiKey);
+
+      const legacyRes = await fetch(legacyUrl.toString());
+      if (legacyRes.status === 429) {
+        res.status(429).json({
+          code: 'RESOURCE_EXHAUSTED',
+          error: { status: 'RESOURCE_EXHAUSTED' },
+        });
+        return;
+      }
+
+      if (legacyRes.ok) {
+        const legacyData = (await legacyRes.json()) as {
+          status?: string;
+          results?: Array<{
+            formatted_address?: string;
+            address_components?: Array<{
+              long_name?: string;
+              types?: string[];
+            }>;
+          }>;
+        };
+
+        if (legacyData.status === 'OVER_QUERY_LIMIT') {
+          res.status(429).json({
+            code: 'RESOURCE_EXHAUSTED',
+            error: { status: 'RESOURCE_EXHAUSTED' },
+          });
+          return;
+        }
+
+        const firstLegacy = legacyData.results?.[0];
+        const formattedAddress = firstLegacy?.formatted_address?.trim();
+        if (formattedAddress) {
+          const components = firstLegacy?.address_components || [];
+          const pickComp = (types: string[]) =>
+            components.find((c) => c.types?.some((t) => types.includes(t)))
+              ?.long_name || '';
+          const sublocality = pickComp([
+            'sublocality_level_1',
+            'sublocality',
+            'neighborhood',
+            'route',
+          ]);
+          const locality = pickComp([
+            'locality',
+            'administrative_area_level_2',
+          ]);
+          const areaLabel =
+            [sublocality, locality].filter(Boolean).join(', ') ||
+            formattedAddress;
+
+          if (reverseGeocodeCache.size >= 200) {
+            reverseGeocodeCache.clear();
+          }
+          reverseGeocodeCache.set(cacheKey, {
+            formattedAddress,
+            areaLabel,
+            source: 'google_geocoding',
+            expiresAt: Date.now() + GEOCODE_CACHE_TTL_MS,
+          });
+          res.json({
+            formattedAddress,
+            areaLabel,
+            source: 'google_geocoding',
+          });
+          return;
+        }
+      }
+    } catch {
+      // Fall through cleanly to coordinate fallback below
+    }
+
+    const fb = formatCoordFallback(lat, lng, lang);
+    res.json({ ...fb, source: 'fallback' });
   });
 
   app.get('/api/rate-limit-status', async (req: Request, res: Response) => {
@@ -347,7 +623,10 @@ async function startServer() {
         setHeaders(res, filePath) {
           if (filePath.endsWith('manifest.webmanifest')) {
             res.setHeader('Content-Type', 'application/manifest+json');
-          } else if (filePath.endsWith('sw.js')) {
+          } else if (
+            filePath.endsWith('sw.js') ||
+            filePath.endsWith('version.json')
+          ) {
             res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
           }
         },

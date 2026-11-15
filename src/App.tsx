@@ -7,12 +7,15 @@ import React, { Suspense, useEffect, useState } from 'react';
 import { ShieldCheck, AlertTriangle, X } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
+import { UpdateProvider } from './contexts/UpdateContext';
 import { Header } from './components/Header';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { VerificationBanner } from './components/VerificationBanner';
 import { DonorSearchView } from './components/DonorSearchView';
 import { Footer } from './components/Footer';
 import { AuthModal } from './components/AuthModal';
+import { AppUpdateModal } from './components/AppUpdateModal';
+import { LaunchAndOnboardingOverlay } from './components/LaunchAndOnboardingOverlay';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { ViewSkeletonLoader } from './components/ViewSkeletonLoader';
 import type { AppView } from './types';
@@ -100,7 +103,7 @@ function resolveInitialViewFromLocation(): AppView {
 }
 
 function AppShell() {
-  const { isAuthReady, lang } = useAuth();
+  const { isAuthReady, lang, applyEmailVerificationCode } = useAuth();
   const [currentView, setCurrentView] = useState<AppView>(() =>
     resolveInitialViewFromLocation()
   );
@@ -110,6 +113,8 @@ function AppShell() {
     null
   );
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [resetOobCode, setResetOobCode] = useState<string | null>(null);
+  const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState(false);
   const [verifyToken, setVerifyToken] = useState<string | null>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -119,6 +124,48 @@ function AppShell() {
       return null;
     }
   });
+
+  useEffect(() => {
+    const handleQuotaExceeded = () => setMapsQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', handleQuotaExceeded);
+    return () =>
+      window.removeEventListener('gmp-quota-exceeded', handleQuotaExceeded);
+  }, []);
+
+  // Handle Firebase Auth action links (?mode=resetPassword&oobCode=... or ?mode=verifyEmail&oobCode=...)
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      const actionMode = url.searchParams.get('mode');
+      const oobCode = url.searchParams.get('oobCode')?.trim();
+      if (!oobCode || (actionMode !== 'resetPassword' && actionMode !== 'verifyEmail')) {
+        return;
+      }
+
+      // Remove one-time action code from address bar immediately
+      url.searchParams.delete('mode');
+      url.searchParams.delete('oobCode');
+      url.searchParams.delete('apiKey');
+      url.searchParams.delete('lang');
+      url.searchParams.delete('continueUrl');
+      window.history.replaceState(
+        window.history.state,
+        '',
+        url.pathname + url.search + url.hash
+      );
+
+      if (actionMode === 'resetPassword') {
+        setResetOobCode(oobCode);
+        setAuthModalOpen(true);
+      } else if (actionMode === 'verifyEmail') {
+        void applyEmailVerificationCode(oobCode).catch(() => {
+          // Non-fatal: user may also verify directly on Firebase hosted page
+        });
+      }
+    } catch {
+      // Ignore URL parsing issues
+    }
+  }, [applyEmailVerificationCode]);
 
   const handleCloseVerifyToken = () => {
     setVerifyToken(null);
@@ -196,6 +243,23 @@ function AppShell() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF8F9] text-[#1F242D] w-full max-w-full overflow-x-hidden">
+      {mapsQuotaExceeded && (
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+          <span>
+            Google Maps Platform quota reached. If you are the app owner, visit{' '}
+            <a
+              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-semibold text-amber-950 hover:text-amber-800"
+            >
+              maps developer site
+            </a>{' '}
+            for instructions to update your account.
+          </span>
+        </div>
+      )}
+
       <Header
         currentView={currentView}
         onNavigate={handleNavigate}
@@ -255,7 +319,13 @@ function AppShell() {
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
+        resetOobCode={resetOobCode}
+        onClearResetOobCode={() => setResetOobCode(null)}
       />
+
+      <AppUpdateModal />
+
+      <LaunchAndOnboardingOverlay />
 
       {verifyToken && (
         <div
@@ -341,7 +411,9 @@ export default function App() {
   return (
     <AuthProvider>
       <NotificationProvider>
-        <AppShell />
+        <UpdateProvider>
+          <AppShell />
+        </UpdateProvider>
       </NotificationProvider>
     </AuthProvider>
   );

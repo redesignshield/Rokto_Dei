@@ -90,11 +90,77 @@ export const BANGLADESH_DISTRICT_COORDINATES: Record<string, GeoCoordinate> = {
   sherpur: { lat: 25.0205, lng: 90.0153 },
 };
 
+// Major Upazila / City Thana Centroids for finer nearest-to-farthest proximity sorting
+export const BANGLADESH_UPAZILA_COORDINATES: Record<string, GeoCoordinate> = {
+  // Dhaka Metro & Suburbs
+  dhanmondi: { lat: 23.7461, lng: 90.3742 },
+  mirpur: { lat: 23.8223, lng: 90.3654 },
+  uttara: { lat: 23.8759, lng: 90.3795 },
+  mohammadpur: { lat: 23.7662, lng: 90.3589 },
+  gulshan: { lat: 23.7925, lng: 90.4078 },
+  banani: { lat: 23.7937, lng: 90.4066 },
+  motijheel: { lat: 23.7330, lng: 90.4172 },
+  shahbagh: { lat: 23.7389, lng: 90.3958 },
+  ramna: { lat: 23.7438, lng: 90.4027 },
+  tejgaon: { lat: 23.7600, lng: 90.3914 },
+  badda: { lat: 23.7805, lng: 90.4267 },
+  khilgaon: { lat: 23.7567, lng: 90.4400 },
+  jatrabari: { lat: 23.7104, lng: 90.4349 },
+  lalbagh: { lat: 23.7189, lng: 90.3881 },
+  savar: { lat: 23.8583, lng: 90.2667 },
+  keraniganj: { lat: 23.6948, lng: 90.3347 },
+  dhamrai: { lat: 23.9137, lng: 90.2179 },
+  dohar: { lat: 23.5975, lng: 90.1456 },
+  nawabganj_dhaka: { lat: 23.6664, lng: 90.1753 },
+
+  // Gazipur & Narayanganj
+  gazipur_sadar: { lat: 23.9999, lng: 90.4203 },
+  tongi: { lat: 23.8977, lng: 90.4023 },
+  kaliakair: { lat: 24.0750, lng: 90.2167 },
+  sreepur_gazipur: { lat: 24.1981, lng: 90.4714 },
+  narayanganj_sadar: { lat: 23.6238, lng: 90.5000 },
+  siddhirganj: { lat: 23.6808, lng: 90.5178 },
+  fatullah: { lat: 23.6428, lng: 90.4831 },
+  rupganj: { lat: 23.7925, lng: 90.5150 },
+
+  // Chattogram City & Hubs
+  panchlaish: { lat: 22.3688, lng: 91.8329 },
+  kotwali_ctg: { lat: 22.3375, lng: 91.8389 },
+  agrabad: { lat: 22.3264, lng: 91.8117 },
+  halishahar: { lat: 22.3372, lng: 91.7875 },
+  patenga: { lat: 22.2442, lng: 91.7975 },
+  nasirabad: { lat: 22.3682, lng: 91.8184 },
+  chandgaon: { lat: 22.3752, lng: 91.8606 },
+  sitakunda: { lat: 22.6200, lng: 91.6589 },
+  hathazari: { lat: 22.5072, lng: 91.8056 },
+};
+
 // Default center of Bangladesh (National Capital)
 export const BANGLADESH_CENTER: GeoCoordinate = {
   lat: 23.8103,
   lng: 90.4125,
 };
+
+// Soft bounding box keeping Google Maps focused cleanly on Bangladesh
+export const BANGLADESH_MAP_BOUNDS = {
+  north: 26.85,
+  south: 20.35,
+  west: 87.85,
+  east: 92.85,
+} as const;
+
+export function getAreaCoords(
+  districtId?: string,
+  upazilaId?: string
+): GeoCoordinate | null {
+  if (upazilaId && BANGLADESH_UPAZILA_COORDINATES[upazilaId]) {
+    return BANGLADESH_UPAZILA_COORDINATES[upazilaId];
+  }
+  if (districtId && BANGLADESH_DISTRICT_COORDINATES[districtId]) {
+    return BANGLADESH_DISTRICT_COORDINATES[districtId];
+  }
+  return null;
+}
 
 /**
  * Calculates straight-line distance in kilometers between two geo coordinates
@@ -136,16 +202,20 @@ function hashString(str: string): number {
 /**
  * CYBER-SECURITY & PRIVACY REQUIREMENT:
  * Derives a privacy-preserving obfuscated coordinate for a donor.
- * Adds a small pseudo-random micro-jitter (~300m - 800m) based on donor UID
- * so multiple donors in the same district don't overlap completely on the map,
- * but exact residential coordinates are NEVER exposed or triangulated.
+ * Anchors to upazila/thana centroid when mapped (falling back to district centroid)
+ * and adds a small deterministic micro-jitter (~300m - 800m) based on donor UID
+ * so multiple donors in the same area don't overlap on the map while keeping
+ * exact residential coordinates private.
  */
 export function getObfuscatedDonorCoords(
   districtId: string,
-  donorUid: string
+  donorUid: string,
+  upazilaId?: string
 ): GeoCoordinate {
   const base =
-    BANGLADESH_DISTRICT_COORDINATES[districtId] || BANGLADESH_CENTER;
+    (upazilaId ? BANGLADESH_UPAZILA_COORDINATES[upazilaId] : undefined) ||
+    BANGLADESH_DISTRICT_COORDINATES[districtId] ||
+    BANGLADESH_CENTER;
   const seed = hashString(donorUid || districtId);
 
   // Generate deterministic offset: angle 0 to 2*PI, radius ~0.3km to ~0.8km
@@ -170,7 +240,7 @@ export function getObfuscatedDonorCoords(
 export function formatDistanceKm(distanceKm: number, lang: 'bn' | 'en'): string {
   if (lang === 'bn') {
     const bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
-    const numStr = distanceKm.toFixed(1).replace(/\./g, '·');
+    const numStr = distanceKm.toFixed(1);
     const bnNum = numStr.replace(/[0-9]/g, (d) => bnDigits[parseInt(d, 10)]);
     return `${bnNum} কিমি দূরে`;
   }

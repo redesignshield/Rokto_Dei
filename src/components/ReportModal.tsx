@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
-import { isDemoRecordId } from '../data/removableDemoData';
 import { REPORT_REASONS } from '../lib/validation';
 import { reportReasonLabel } from '../lib/i18n';
 import { submitAbuseReport } from '../services/roktoService';
@@ -33,22 +32,18 @@ export function ReportModal({
 
   if (!isOpen) return null;
 
-  const isDemoTarget = isDemoRecordId(targetId);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      if (!isDemoTarget) {
-        await submitAbuseReport({
-          targetType,
-          targetId,
-          targetUid,
-          reason,
-          description,
-        });
-      }
+      await submitAbuseReport({
+        targetType,
+        targetId,
+        targetUid,
+        reason,
+        description,
+      });
       setSubmitted(true);
     } catch (err) {
       setError(
@@ -97,11 +92,7 @@ export function ReportModal({
         {submitted ? (
           <div className="space-y-4">
             <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-900 leading-relaxed">
-              {isDemoTarget
-                ? lang === 'bn'
-                  ? 'ডেমো রিপোর্ট ফ্লো সফলভাবে কাজ করছে! (যেহেতু এটি একটি ডেমো তালিকা, তাই আসল Firestore ডাটাবেসে কোনো ভুয়া রিপোর্ট সংরক্ষণ করা হয়নি।)'
-                  : 'Demo report flow verified! (No fake moderation report was written to live Firestore.)'
-                : lang === 'bn'
+              {lang === 'bn'
                 ? 'আপনার রিপোর্টটি সফলভাবে জমা হয়েছে। অ্যাডমিন টিম এটি যাচাই করে প্রয়োজনীয় ব্যবস্থা নেবে।'
                 : 'Your report has been submitted for moderator review.'}
             </div>

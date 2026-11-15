@@ -8,6 +8,8 @@ import React, {
   useState,
 } from 'react';
 import {
+  applyActionCode,
+  confirmPasswordReset,
   createUserWithEmailAndPassword,
   getRedirectResult,
   onAuthStateChanged,
@@ -18,6 +20,7 @@ import {
   signInWithRedirect,
   signOut as firebaseSignOut,
   updateProfile,
+  verifyPasswordResetCode,
 } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { Timestamp } from 'firebase/firestore';
@@ -26,7 +29,6 @@ import {
   BOOTSTRAPPED_SUPER_ADMIN_EMAIL,
   googleProvider,
 } from '../firebase';
-import { DEMO_STORAGE_KEY } from '../data/removableDemoData';
 import {
   clearVerifiedProfileCache,
   ensureUserProfile,
@@ -53,8 +55,6 @@ interface AuthContextValue {
   adminRole: AdminRoleType | null;
   lang: AppLanguage;
   setLang: (lang: AppLanguage) => void;
-  demoMode: boolean;
-  setDemoMode: (enabled: boolean) => void;
   loginWithGoogle: () => Promise<void>;
   registerWithEmail: (
     fullName: string,
@@ -65,6 +65,9 @@ interface AuthContextValue {
   resendVerification: () => Promise<void>;
   refreshVerificationState: () => Promise<boolean>;
   resetPassword: (email: string) => Promise<void>;
+  verifyResetCode: (oobCode: string) => Promise<string>;
+  confirmResetPassword: (oobCode: string, newPassword: string) => Promise<void>;
+  applyEmailVerificationCode: (oobCode: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshOwnProfileAndDonor: () => Promise<void>;
 }
@@ -79,23 +82,34 @@ export function formatFirebaseAuthError(error: unknown): string {
 
   switch (code) {
     case 'auth/operation-not-allowed':
-      return 'Firebase Console-এ এখনো Email/Password প্রোভাইডার চালু করা হয়নি। প্রজেক্ট অ্যাডমিন হিসেবে Firebase Console → Authentication → Sign-in method থেকে Email/Password চালু করুন, অথবা নিচের Google বাটন দিয়ে এখনই লগইন করুন।';
+      return 'Firebase Console-এ এখনো Email/Password প্রোভাইডার চালু করা হয়নি। Firebase Console → Authentication → Sign-in method থেকে Email/Password চালু করুন।';
     case 'auth/email-already-in-use':
-      return 'এই ইমেইল দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট খোলা আছে। অনুগ্রহ করে লগইন করুন।';
+      return 'এই ইমেইল দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট খোলা আছে। অনুগ্রহ করে লগইন করুন অথবা পাসওয়ার্ড ভুলে গেলে রিসেট করুন।';
     case 'auth/invalid-email':
-      return 'ইমেইল ঠিকানার ফরম্যাট সঠিক নয়।';
+    case 'auth/missing-email':
+      return 'সঠিক ইমেইল ঠিকানা লিখুন।';
     case 'auth/weak-password':
       return 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।';
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
     case 'auth/user-not-found':
       return 'ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।';
+    case 'auth/user-disabled':
+      return 'এই অ্যাকাউন্টটি সাময়িকভাবে নিষ্ক্রিয় করা হয়েছে।';
     case 'auth/too-many-requests':
       return 'অতিরিক্তবার চেষ্টার কারণে সাময়িকভাবে ব্লক হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।';
+    case 'auth/network-request-failed':
+      return 'ইন্টারনেট সংযোগে সমস্যা হয়েছে। নেটওয়ার্ক যাচাই করে আবার চেষ্টা করুন।';
+    case 'auth/expired-action-code':
+      return 'রিসেট বা ভেরিফিকেশন লিংকটির মেয়াদ শেষ হয়ে গেছে। অনুগ্রহ করে নতুন লিংক পাঠান।';
+    case 'auth/invalid-action-code':
+      return 'এই লিংকটি সঠিক নয় অথবা ইতিমধ্যে ব্যবহৃত হয়েছে। অনুগ্রহ করে নতুন লিংক অনুরোধ করুন।';
     case 'auth/popup-closed-by-user':
       return 'Google লগইন পপআপটি বন্ধ করা হয়েছে। আবার চেষ্টা করুন।';
     case 'auth/unauthorized-domain':
       return 'এই ডোমেইনটি Firebase Authentication → Authorized domains তালিকায় যুক্ত নেই।';
+    case 'auth/operation-not-supported-in-this-environment':
+      return 'এই অ্যাপ ব্রাউজার/WebView-তে Google পপআপ সাপোর্ট করছে না। অনুগ্রহ করে ইমেইল ও পাসওয়ার্ড দিয়ে লগইন করুন।';
     default:
       return error instanceof Error
         ? error.message
@@ -112,22 +126,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [lang, setLang] = useState<AppLanguage>('bn');
   const [verificationTick, setVerificationTick] = useState(0);
-  const [demoMode, setDemoModeState] = useState<boolean>(() => {
-    try {
-      return window.localStorage.getItem(DEMO_STORAGE_KEY) === 'on';
-    } catch {
-      return false;
-    }
-  });
-
-  const setDemoMode = useCallback((enabled: boolean) => {
-    setDemoModeState(enabled);
-    try {
-      window.localStorage.setItem(DEMO_STORAGE_KEY, enabled ? 'on' : 'off');
-    } catch {
-      // Ignore storage restrictions
-    }
-  }, []);
 
   const syncInFlightRef = useRef<{
     uid: string;
@@ -336,13 +334,87 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return false;
   }, [syncUserRecords]);
 
-  const resetPassword = useCallback(async (email: string) => {
+  const resetPassword = useCallback(
+    async (email: string) => {
+      const cleanEmail = email.trim();
+      if (!cleanEmail) {
+        throw new Error('আপনার অ্যাকাউন্টের ইমেইল ঠিকানা লিখুন।');
+      }
+      auth.languageCode = lang === 'bn' ? 'bn' : 'en';
+      const isPublicWebOrigin =
+        typeof window !== 'undefined' &&
+        /^https?:\/\//i.test(window.location.origin) &&
+        !/localhost|127\.0\.0\.1/i.test(window.location.hostname);
+
+      try {
+        if (isPublicWebOrigin) {
+          try {
+            await sendPasswordResetEmail(auth, cleanEmail, {
+              url: window.location.origin,
+              handleCodeInApp: false,
+            });
+            return;
+          } catch (innerErr) {
+            const innerCode =
+              typeof innerErr === 'object' && innerErr !== null && 'code' in innerErr
+                ? String((innerErr as { code?: string }).code)
+                : '';
+            // Fallback to default Firebase hosted action page if continueUrl is rejected
+            if (
+              innerCode !== 'auth/invalid-continue-uri' &&
+              innerCode !== 'auth/unauthorized-continue-uri' &&
+              innerCode !== 'auth/missing-continue-uri'
+            ) {
+              throw innerErr;
+            }
+          }
+        }
+        await sendPasswordResetEmail(auth, cleanEmail);
+      } catch (error) {
+        throw new Error(formatFirebaseAuthError(error));
+      }
+    },
+    [lang]
+  );
+
+  const verifyResetCode = useCallback(async (oobCode: string): Promise<string> => {
     try {
-      await sendPasswordResetEmail(auth, email.trim());
+      return await verifyPasswordResetCode(auth, oobCode);
     } catch (error) {
       throw new Error(formatFirebaseAuthError(error));
     }
   }, []);
+
+  const confirmResetPassword = useCallback(
+    async (oobCode: string, newPassword: string): Promise<void> => {
+      try {
+        await confirmPasswordReset(auth, oobCode, newPassword);
+      } catch (error) {
+        throw new Error(formatFirebaseAuthError(error));
+      }
+    },
+    []
+  );
+
+  const applyEmailVerificationCode = useCallback(
+    async (oobCode: string): Promise<void> => {
+      try {
+        await applyActionCode(auth, oobCode);
+        if (auth.currentUser) {
+          await auth.currentUser.reload();
+          await auth.currentUser.getIdToken(true);
+          setFirebaseUser(auth.currentUser);
+          setVerificationTick((v) => v + 1);
+          if (auth.currentUser.emailVerified) {
+            await syncUserRecords(auth.currentUser);
+          }
+        }
+      } catch (error) {
+        throw new Error(formatFirebaseAuthError(error));
+      }
+    },
+    [syncUserRecords]
+  );
 
   const logout = useCallback(async () => {
     clearVerifiedProfileCache();
@@ -382,14 +454,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       adminRole,
       lang,
       setLang,
-      demoMode,
-      setDemoMode,
       loginWithGoogle,
       registerWithEmail,
       loginWithEmail,
       resendVerification,
       refreshVerificationState,
       resetPassword,
+      verifyResetCode,
+      confirmResetPassword,
+      applyEmailVerificationCode,
       logout,
       refreshOwnProfileAndDonor,
     }),
@@ -404,15 +477,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isSuperAdmin,
       adminRole,
       lang,
-      demoMode,
       verificationTick,
-      setDemoMode,
       loginWithGoogle,
       registerWithEmail,
       loginWithEmail,
       resendVerification,
       refreshVerificationState,
       resetPassword,
+      verifyResetCode,
+      confirmResetPassword,
+      applyEmailVerificationCode,
       logout,
       refreshOwnProfileAndDonor,
     ]

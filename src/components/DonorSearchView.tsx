@@ -1,30 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   AlertCircle,
   ArrowRight,
-  Award,
   CheckCircle2,
   Clock,
-  Compass,
   Crosshair,
   Droplets,
   Eye,
   Flag,
   HeartHandshake,
-  List,
-  Map as MapIcon,
   MapPin,
   MessageCircle,
   MessageSquare,
-  Navigation,
   Phone,
   RotateCcw,
   Search,
-  ShieldCheck,
-  Sparkles,
   UserPlus,
-  Users,
   X,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -35,22 +26,16 @@ import {
   getUpazilasByDistrict,
 } from '../data/bdLocations';
 import {
-  DEMO_BLOOD_REQUESTS,
-  filterAndMergeDonors,
-  isDemoRecordId,
-} from '../data/removableDemoData';
-import {
   availabilityLabel,
   contactMethodLabel,
-  donationPreferenceLabel,
   formatTimestamp,
-  nightCallPreferenceLabel,
 } from '../lib/i18n';
 import { BLOOD_GROUPS, daysSinceDate } from '../lib/validation';
 import {
   listOpenBloodRequests,
   resolveDonorContact,
   searchActiveDonors,
+  subscribeActiveDonors,
 } from '../services/roktoService';
 import type {
   AppView,
@@ -60,16 +45,13 @@ import type {
   DonorProfile,
 } from '../types';
 import { ContactResolutionModal } from './ContactResolutionModal';
-import { DemoPreviewBanner } from './DemoPreviewBanner';
 import { DonorProfileModal } from './DonorProfileModal';
-import {
-  BloodDropCrest,
-  DonationCareIllustration,
-} from './MedicalIllustrations';
+import { DonationCareIllustration } from './MedicalIllustrations';
 import { ReportModal } from './ReportModal';
 import { DonorMapComponent } from './DonorMapComponent';
 import {
   formatDistanceKm,
+  getAreaCoords,
   getObfuscatedDonorCoords,
   haversineDistance,
   type GeoCoordinate,
@@ -98,11 +80,8 @@ export function DonorSearchView({
     ownDonor,
     isEmailVerified,
     lang,
-    demoMode,
   } = useAuth();
-  const canViewDirectory = Boolean(
-    (firebaseUser && isEmailVerified) || demoMode
-  );
+  const canViewDirectory = Boolean(firebaseUser && isEmailVerified);
 
   const [bloodGroup, setBloodGroup] = useState<BloodGroup>('O+');
   const [divisionId, setDivisionId] = useState('');
@@ -147,19 +126,152 @@ export function DonorSearchView({
   // Report modal state
   const [reportTarget, setReportTarget] = useState<DonorProfile | null>(null);
 
-  // Google Maps & Geo-Radius States
-  const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  // Real-Time Google Maps, Live GPS & Reverse-Geocoded Address States
   const [userLocation, setUserLocation] = useState<GeoCoordinate | null>(null);
+  const [userAddress, setUserAddress] = useState<string | null>(null);
+  const [locationMode, setLocationMode] = useState<'gps' | 'manual' | null>(null);
+  const [resolvingAddress, setResolvingAddress] = useState(false);
   const [locatingUser, setLocatingUser] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
-  const [selectedRadiusKm, setSelectedRadiusKm] = useState<number | null>(null);
+  const locationModeRef = useRef<'gps' | 'manual' | null>(null);
+  const lastGeocodedRef = useRef<{
+    lat: number;
+    lng: number;
+    lang: 'bn' | 'en';
+  } | null>(null);
 
-  const handleRequestUserLocation = () => {
+  useEffect(() => {
+    locationModeRef.current = locationMode;
+  }, [locationMode]);
+
+  const resolveUserAddress = useCallback(
+    async (coords: GeoCoordinate, activeLang: 'bn' | 'en', force = false) => {
+      const prev = lastGeocodedRef.current;
+      if (
+        !force &&
+        prev &&
+        prev.lang === activeLang &&
+        haversineDistance(prev.lat, prev.lng, coords.lat, coords.lng) < 0.15
+      ) {
+        return;
+      }
+
+      lastGeocodedRef.current = {
+        lat: coords.lat,
+        lng: coords.lng,
+        lang: activeLang,
+      };
+      setResolvingAddress(true);
+
+      try {
+        const apiBase = (
+          (import.meta as { env?: Record<string, string | undefined> }).env
+            ?.VITE_API_BASE_URL || ''
+        ).replace(/\/$/, '');
+        const res = await fetch(
+          `${apiBase}/api/reverse-geocode?lat=${encodeURIComponent(
+            coords.lat
+          )}&lng=${encodeURIComponent(coords.lng)}&lang=${activeLang}`
+        );
+
+        if (res.status === 429) {
+          window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+          return;
+        }
+
+        const data = (await res.json()) as {
+          formattedAddress?: string;
+          areaLabel?: string;
+          error?: { status?: string };
+        };
+
+        if (data?.error?.status === 'RESOURCE_EXHAUSTED') {
+          window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+          return;
+        }
+
+        const resolved =
+          data.formattedAddress?.trim() || data.areaLabel?.trim() || '';
+        if (resolved) {
+          setUserAddress(resolved);
+        }
+      } catch {
+        // Keep existing address or fall back gracefully
+      } finally {
+        setResolvingAddress(false);
+      }
+    },
+    []
+  );
+
+  // Automatically watch user's live GPS location when viewing the verified directory
+  useEffect(() => {
+    if (!canViewDirectory) {
+      return;
+    }
+    if (!navigator.geolocation) {
+      if (locationModeRef.current !== 'manual') {
+        setLocationError(
+          lang === 'bn'
+            ? 'ব্রাউজারে GPS নেই — নিচ থেকে জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
+            : 'Geolocation not available — pick your district or tap the map.'
+        );
+      }
+      return;
+    }
+
+    setLocatingUser(true);
+    setLocationError(null);
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (locationModeRef.current === 'manual') {
+          setLocatingUser(false);
+          return;
+        }
+        const nextCoords: GeoCoordinate = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        };
+        setUserLocation(nextCoords);
+        setLocationMode('gps');
+        setLocatingUser(false);
+        setLocationError(null);
+        void resolveUserAddress(nextCoords, lang);
+      },
+      (err) => {
+        setLocatingUser(false);
+        if (locationModeRef.current === 'manual') {
+          return;
+        }
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocationError(
+            lang === 'bn'
+              ? 'GPS পারমিশন পাওয়া যায়নি। এখান থেকে আপনার জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
+              : 'GPS permission blocked. Select your district here or tap anywhere on the map.'
+          );
+        } else {
+          setLocationError(
+            lang === 'bn'
+              ? 'বর্তমান GPS অবস্থান পাওয়া যায়নি। এখান থেকে আপনার জেলা বেছে নিন।'
+              : 'Unable to detect GPS location. Select your district here or tap on the map.'
+          );
+        }
+      },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [canViewDirectory, lang, resolveUserAddress]);
+
+  const handleRequestUserLocation = useCallback(() => {
     if (!navigator.geolocation) {
       setLocationError(
         lang === 'bn'
-          ? 'আপনার ব্রাউজারে লোকেশন সাপোর্ট নেই'
-          : 'Geolocation is not supported by your browser'
+          ? 'ব্রাউজারে GPS সাপোর্ট নেই। অনুগ্রহ করে জেলা বেছে নিন বা ম্যাপে ট্যাপ করুন।'
+          : 'Geolocation is not supported. Please select a district or tap the map.'
       );
       return;
     }
@@ -167,32 +279,51 @@ export function DonorSearchView({
     setLocationError(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setUserLocation({
+        const nextCoords: GeoCoordinate = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
-        });
+        };
+        setUserLocation(nextCoords);
+        setLocationMode('gps');
+        locationModeRef.current = 'gps';
         setLocatingUser(false);
-        if (selectedRadiusKm === null) {
-          setSelectedRadiusKm(25);
-        }
+        void resolveUserAddress(nextCoords, lang, true);
       },
       () => {
         setLocatingUser(false);
         setLocationError(
           lang === 'bn'
-            ? 'লোকেশন পারমিশন পাওয়া যায়নি। ব্রাউজার সেটিংসে পারমিশন দিন।'
-            : 'Location permission denied or timed out.'
+            ? 'GPS পারমিশন বন্ধ আছে। নিচের ড্রপডাউন থেকে জেলা বেছে নিন অথবা ম্যাপে ট্যাপ করুন।'
+            : 'GPS permission is blocked. Choose your district below or tap anywhere on the map.'
         );
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
-  };
+  }, [lang, resolveUserAddress]);
 
-  const handleClearLocation = () => {
-    setUserLocation(null);
-    setSelectedRadiusKm(null);
-    setLocationError(null);
-  };
+  const handleSetManualLocation = useCallback(
+    (coords: GeoCoordinate, customLabel?: string) => {
+      locationModeRef.current = 'manual';
+      setLocationMode('manual');
+      setUserLocation(coords);
+      setLocatingUser(false);
+      setLocationError(null);
+      if (customLabel) {
+        setUserAddress(customLabel);
+      }
+      void resolveUserAddress(coords, lang, true);
+    },
+    [lang, resolveUserAddress]
+  );
+
+  const mapFocusCoords = useMemo(
+    () =>
+      getAreaCoords(
+        districtId || ownDonor?.districtId,
+        upazilaId || ownDonor?.upazilaId
+      ),
+    [districtId, upazilaId, ownDonor?.districtId, ownDonor?.upazilaId]
+  );
 
   const districts = getDistrictsByDivision(divisionId);
   const upazilas = getUpazilasByDistrict(districtId);
@@ -201,24 +332,23 @@ export function DonorSearchView({
   useEffect(() => {
     let isSubscribed = true;
     async function loadUrgent() {
+      if (!firebaseUser || !isEmailVerified) {
+        if (isSubscribed) {
+          setLiveEmergencyRequests([]);
+        }
+        return;
+      }
       try {
-        if (firebaseUser && isEmailVerified) {
-          const reqs = await listOpenBloodRequests({
-            statusFilter: 'open_only',
-          });
-          if (isSubscribed && reqs.length > 0) {
-            setLiveEmergencyRequests(reqs.slice(0, 3));
-            return;
-          }
+        const reqs = await listOpenBloodRequests({
+          statusFilter: 'open_only',
+        });
+        if (isSubscribed) {
+          setLiveEmergencyRequests(reqs.slice(0, 3));
         }
       } catch {
-        // ignore and fallback to demo preview
-      }
-      if (isSubscribed) {
-        const demoOpens = DEMO_BLOOD_REQUESTS.filter(
-          (r) => r.status === 'open'
-        ).slice(0, 3);
-        setLiveEmergencyRequests(demoOpens);
+        if (isSubscribed) {
+          setLiveEmergencyRequests([]);
+        }
       }
     }
     loadUrgent();
@@ -236,7 +366,10 @@ export function DonorSearchView({
       onlyAvailable?: boolean;
     }) => {
       const hasVerifiedSession = Boolean(firebaseUser && isEmailVerified);
-      if (!hasVerifiedSession && !demoMode) {
+      if (!hasVerifiedSession) {
+        setDonors([]);
+        setTotalListedCount(0);
+        setAvailableCount(0);
         setHasSearched(true);
         return;
       }
@@ -258,31 +391,17 @@ export function DonorSearchView({
       setHasSearched(true);
 
       try {
-        let realDonors: DonorProfile[] = [];
-        if (hasVerifiedSession) {
-          const liveResult = await searchActiveDonors({
-            bloodGroup: activeGroup,
-            divisionId: activeDiv || undefined,
-            districtId: activeDist || undefined,
-            upazilaId: activeUpz || undefined,
-            onlyAvailable: false,
-          });
-          realDonors = liveResult.donors;
-        }
-
-        const merged = filterAndMergeDonors({
-          realDonors,
+        const liveResult = await searchActiveDonors({
           bloodGroup: activeGroup,
           divisionId: activeDiv || undefined,
           districtId: activeDist || undefined,
           upazilaId: activeUpz || undefined,
           onlyAvailable: activeOnlyAvailable,
-          includeDemo: demoMode,
         });
 
-        setDonors(merged.donors);
-        setTotalListedCount(merged.totalListedCount);
-        setAvailableCount(merged.availableCount);
+        setDonors(liveResult.donors);
+        setTotalListedCount(liveResult.totalListedCount);
+        setAvailableCount(liveResult.availableCount);
       } catch (err) {
         setError(
           err instanceof Error
@@ -296,7 +415,6 @@ export function DonorSearchView({
     [
       firebaseUser,
       isEmailVerified,
-      demoMode,
       bloodGroup,
       divisionId,
       districtId,
@@ -305,17 +423,57 @@ export function DonorSearchView({
     ]
   );
 
+  // Real-time Firestore listener for matching donors
   useEffect(() => {
-    if (canViewDirectory) {
-      executeSearch();
-    } else {
+    if (!canViewDirectory) {
       setDonors([]);
       setTotalListedCount(0);
       setAvailableCount(0);
+      setLoading(false);
+      return;
     }
-  }, [canViewDirectory, executeSearch]);
 
-  // Live client-side keyword search, geo-radius filter & proximity sorting
+    setLoading(true);
+    setError(null);
+    setHasSearched(true);
+
+    const unsubscribe = subscribeActiveDonors(
+      {
+        bloodGroup,
+        divisionId: divisionId || undefined,
+        districtId: districtId || undefined,
+        upazilaId: upazilaId || undefined,
+        onlyAvailable,
+      },
+      (liveResult) => {
+        setDonors(liveResult.donors);
+        setTotalListedCount(liveResult.totalListedCount);
+        setAvailableCount(liveResult.availableCount);
+        setLoading(false);
+      },
+      (err) => {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'রক্তদাতার তালিকা লোড করতে সমস্যা হয়েছে।'
+        );
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [
+    canViewDirectory,
+    bloodGroup,
+    divisionId,
+    districtId,
+    upazilaId,
+    onlyAvailable,
+  ]);
+
+  // Live client-side keyword search & strict nearest-to-farthest proximity sorting
   const filteredDonors = useMemo(() => {
     let result = donors;
 
@@ -346,43 +504,45 @@ export function DonorSearchView({
       });
     }
 
-    // 2. Geo-Radius filter if user location is active
-    if (userLocation && selectedRadiusKm !== null) {
-      result = result.filter((d) => {
-        const coords = getObfuscatedDonorCoords(d.districtId, d.uid);
-        const dist = haversineDistance(
-          userLocation.lat,
-          userLocation.lng,
-          coords.lat,
-          coords.lng
-        );
-        return dist <= selectedRadiusKm;
-      });
-    }
-
-    // 3. Sort by proximity if user location is active (closest donors first!)
+    // 2. Sort strictly from nearest to farthest relative to user's live location
     if (userLocation) {
+      const rank: Record<DonorProfile['availability'], number> = {
+        available: 0,
+        not_specified: 1,
+        temporarily_unavailable: 2,
+      };
       result = [...result].sort((a, b) => {
-        const coordsA = getObfuscatedDonorCoords(a.districtId, a.uid);
+        const coordsA = getObfuscatedDonorCoords(
+          a.districtId,
+          a.uid,
+          a.upazilaId
+        );
         const distA = haversineDistance(
           userLocation.lat,
           userLocation.lng,
           coordsA.lat,
           coordsA.lng
         );
-        const coordsB = getObfuscatedDonorCoords(b.districtId, b.uid);
+        const coordsB = getObfuscatedDonorCoords(
+          b.districtId,
+          b.uid,
+          b.upazilaId
+        );
         const distB = haversineDistance(
           userLocation.lat,
           userLocation.lng,
           coordsB.lat,
           coordsB.lng
         );
-        return distA - distB;
+        if (distA !== distB) {
+          return distA - distB;
+        }
+        return rank[a.availability] - rank[b.availability];
       });
     }
 
     return result;
-  }, [donors, keyword, userLocation, selectedRadiusKm]);
+  }, [donors, keyword, userLocation]);
 
   const handleGroupSelect = (bg: BloodGroup) => {
     setBloodGroup(bg);
@@ -407,22 +567,6 @@ export function DonorSearchView({
     donor: DonorProfile,
     method: ContactMethod
   ) => {
-    if (isDemoRecordId(donor.uid)) {
-      setContactModalData({
-        personName: donor.displayName,
-        bloodGroup: donor.bloodGroup,
-        selectedMethod: method,
-        phoneNumber: '+8801700000000',
-        quota: {
-          hourlyUsed: 1,
-          hourlyLimit: 5,
-          dailyUsed: 2,
-          dailyLimit: 15,
-        },
-      });
-      return;
-    }
-
     if (!firebaseUser) {
       onOpenAuth();
       return;
@@ -760,8 +904,6 @@ export function DonorSearchView({
 
       {/* Main Container */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
-        {/* Removable Demo Preview Banner */}
-        <DemoPreviewBanner />
 
         {/* =========================================================================
             2. High-Priority Emergency Blood Requests Strip
@@ -770,7 +912,7 @@ export function DonorSearchView({
           <section className="bg-white rounded-3xl border border-red-200/80 p-5 sm:p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse" />
+                <Droplets className="w-4 h-4 text-[#C80828] fill-current shrink-0" />
                 <h2 className="text-base sm:text-lg font-bold text-neutral-900 flex items-center gap-2">
                   <span>
                     {lang === 'bn'
@@ -874,175 +1016,9 @@ export function DonorSearchView({
         )}
 
         {/* =========================================================================
-            3. Verified Blood Donors Directory (Results Feed)
+            3. Verified Blood Donors Directory (Real-Time Map + Nearest-First Feed)
            ========================================================================= */}
-        <section className="space-y-4">
-          {/* Results Summary Header */}
-          <div className="bg-white rounded-2xl border border-neutral-200/80 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-xl bg-red-50 text-[#C80828] flex items-center justify-center shrink-0">
-                <Users className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base sm:text-lg font-bold text-neutral-900">
-                    {lang === 'bn'
-                      ? 'রক্তদাতাদের তালিকা'
-                      : 'Blood Donors Directory'}
-                  </h2>
-                  <span className="font-mono text-xs font-bold text-[#C80828] bg-[#FDF2F4] px-2 py-0.5 rounded-md border border-[#FADCE2]">
-                    {bloodGroup}
-                  </span>
-                </div>
-                <p className="text-xs text-neutral-500 truncate">
-                  {lang === 'bn'
-                    ? `${bloodGroup} গ্রুপের রক্তদাতাদের তালিকা (সুরক্ষিত ও সরাসরি যোগাযোগ)`
-                    : `Verified list of ${bloodGroup} blood donors`}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto shrink-0">
-              {/* List / Map Switcher */}
-              <div className="inline-flex p-1 bg-neutral-100 rounded-xl border border-neutral-200 text-xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('list')}
-                  className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-                    viewMode === 'list'
-                      ? 'bg-white text-[#C80828] shadow-xs font-bold'
-                      : 'text-neutral-600 hover:text-neutral-900'
-                  }`}
-                >
-                  <List className="w-3.5 h-3.5" />
-                  <span>{lang === 'bn' ? 'তালিকা' : 'List'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('map')}
-                  className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-                    viewMode === 'map'
-                      ? 'bg-white text-[#C80828] shadow-xs font-bold'
-                      : 'text-neutral-600 hover:text-neutral-900'
-                  }`}
-                >
-                  <MapIcon className="w-3.5 h-3.5" />
-                  <span>{lang === 'bn' ? 'গুগল ম্যাপস' : 'Google Map'}</span>
-                </button>
-              </div>
-
-              {/* Stats pill */}
-              <div className="flex items-center gap-3 text-xs font-mono font-semibold text-neutral-600 bg-neutral-50 px-3 py-1.5 rounded-xl border border-neutral-200/60">
-                <span>
-                  {lang === 'bn' ? 'ফলাফল: ' : 'Found: '}
-                  <strong className="text-neutral-900 font-bold tabular-nums">
-                    {filteredDonors.length}
-                  </strong>{' '}
-                  {lang === 'bn' ? 'জন' : 'donors'}
-                </span>
-                <span className="text-neutral-300">·</span>
-                <span>
-                  {lang === 'bn' ? 'প্রস্তুত: ' : 'Ready: '}
-                  <strong className="text-emerald-700 font-bold tabular-nums">
-                    {availableCount}
-                  </strong>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Geo-Radius & Geolocation Proximity Controls */}
-          <div className="bg-[#FAF8F9] rounded-2xl border border-[#F7D4DC] p-3.5 sm:p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-2xs">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              {/* Get My Location Button */}
-              {userLocation ? (
-                <div className="inline-flex items-center gap-2 bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1.5 rounded-xl font-medium">
-                  <Crosshair className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>
-                    {lang === 'bn'
-                      ? 'আপনার অবস্থান সক্রিয়'
-                      : 'Your Location Active'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleClearLocation}
-                    className="ml-1 text-emerald-700 hover:text-emerald-950 cursor-pointer font-bold px-1"
-                    title={lang === 'bn' ? 'অবস্থান মুছুন' : 'Clear location'}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleRequestUserLocation}
-                  disabled={locatingUser}
-                  className="min-h-[36px] px-3.5 py-1.5 bg-[#C80828] hover:bg-[#a3051e] active:bg-[#800417] text-white font-semibold rounded-xl flex items-center gap-2 shadow-xs cursor-pointer transition-all"
-                >
-                  <Navigation
-                    className={`w-3.5 h-3.5 ${locatingUser ? 'animate-spin' : ''}`}
-                  />
-                  <span>
-                    {locatingUser
-                      ? lang === 'bn'
-                        ? 'অবস্থান খোঁজা হচ্ছে...'
-                        : 'Locating...'
-                      : lang === 'bn'
-                      ? 'আমার নিকটবর্তী ডোনার খুঁজুন (GPS)'
-                      : 'Find Near Me (GPS)'}
-                  </span>
-                </button>
-              )}
-
-              {/* Radius Filter Pills */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-neutral-500 font-medium ml-1">
-                  {lang === 'bn' ? 'দূরত্ব ব্যাসার্ধ:' : 'Radius:'}
-                </span>
-                {(
-                  [
-                    [null, lang === 'bn' ? 'সকল' : 'All'],
-                    [10, lang === 'bn' ? '১০ কিমি' : '10 km'],
-                    [25, lang === 'bn' ? '২৫ কিমি' : '25 km'],
-                    [50, lang === 'bn' ? '৫০ কিমি' : '50 km'],
-                    [100, lang === 'bn' ? '১০০ কিমি' : '100 km'],
-                  ] as const
-                ).map(([radiusVal, radiusLabel]) => {
-                  const isActive = selectedRadiusKm === radiusVal;
-                  return (
-                    <button
-                      key={String(radiusVal)}
-                      type="button"
-                      onClick={() => {
-                        setSelectedRadiusKm(radiusVal);
-                        if (!userLocation && radiusVal !== null) {
-                          handleRequestUserLocation();
-                        }
-                      }}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                        isActive
-                          ? 'bg-[#C80828] text-white font-bold shadow-xs'
-                          : 'bg-white text-neutral-700 hover:bg-neutral-100 border border-neutral-200'
-                      }`}
-                    >
-                      {radiusLabel}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Privacy notice for donors */}
-            <div className="flex items-center gap-1.5 text-neutral-500 text-[11px]">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>
-                {lang === 'bn'
-                  ? 'সাইবার নিরাপত্তা: ডোনারদের সুনির্দিষ্ট বাড়ি ম্যাপে উন্মুক্ত করা হয় না'
-                  : 'Cyber-Safe: Exact residential coordinates are privacy-obfuscated'}
-              </span>
-            </div>
-          </div>
-
+        <section className="space-y-5">
           {/* Donor Feed / Unauthenticated Guard */}
           {!canViewDirectory && !firebaseUser ? (
             <div className="bg-white rounded-3xl border border-neutral-200/80 p-8 sm:p-12 text-center flex flex-col items-center space-y-5">
@@ -1083,7 +1059,24 @@ export function DonorSearchView({
               </p>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-5">
+              {/* Live Real-Time Google Map with User Location Address & Nearest Donor Pins */}
+              <DonorMapComponent
+                donors={filteredDonors}
+                userLocation={userLocation}
+                userAddress={userAddress}
+                locationMode={locationMode}
+                locatingUser={locatingUser}
+                resolvingAddress={resolvingAddress}
+                locationError={locationError}
+                selectedDistrictId={districtId || ownDonor?.districtId}
+                focusCoords={mapFocusCoords}
+                onRequestLocation={handleRequestUserLocation}
+                onSetManualLocation={handleSetManualLocation}
+                onSelectDonor={(d) => setSelectedDonorForModal(d)}
+                lang={lang}
+              />
+
               {loading ? (
                 <div className="space-y-3">
                   {[1, 2, 3, 4].map((n) => (
@@ -1099,14 +1092,6 @@ export function DonorSearchView({
                     </div>
                   ))}
                 </div>
-              ) : viewMode === 'map' ? (
-                <DonorMapComponent
-                  donors={filteredDonors}
-                  userLocation={userLocation}
-                  selectedRadiusKm={selectedRadiusKm}
-                  onSelectDonor={(d) => setSelectedDonorForModal(d)}
-                  lang={lang}
-                />
               ) : filteredDonors.length === 0 && hasSearched ? (
                 <div className="bg-white rounded-3xl border border-neutral-200/80 p-8 sm:p-12 text-center space-y-4">
                   <DonationCareIllustration className="w-48 h-36 mx-auto" />
@@ -1144,12 +1129,25 @@ export function DonorSearchView({
                   </div>
                 </div>
               ) : (
-                /* Sleek, Modern Donor Cards Feed */
+                /* Sleek, Modern Donor Cards Feed Sorted Closest to Farthest */
                 <div className="space-y-3">
-                  {filteredDonors.map((donor) => {
+                  {filteredDonors.map((donor, idx) => {
                     const donationDays = daysSinceDate(donor.lastDonationDate);
                     const initials = getInitials(donor.displayName);
                     const isAvailable = donor.availability === 'available';
+                    const donorCoords = getObfuscatedDonorCoords(
+                      donor.districtId,
+                      donor.uid,
+                      donor.upazilaId
+                    );
+                    const distanceKm = userLocation
+                      ? haversineDistance(
+                          userLocation.lat,
+                          userLocation.lng,
+                          donorCoords.lat,
+                          donorCoords.lng
+                        )
+                      : null;
 
                     return (
                       <article
@@ -1195,26 +1193,16 @@ export function DonorSearchView({
                                 {availabilityLabel(donor.availability, lang)}
                               </span>
 
-                              {/* Distance Badge if location active */}
-                              {userLocation && (
+                              {/* Distance Badge if location active (closest donors highlighted first) */}
+                              {distanceKm !== null && (
                                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#C80828] bg-[#FDF2F4] px-2 py-0.5 rounded-md border border-[#FADCE2]">
                                   <Crosshair className="w-3 h-3 text-[#C80828]" />
                                   <span>
-                                    {formatDistanceKm(
-                                      haversineDistance(
-                                        userLocation.lat,
-                                        userLocation.lng,
-                                        getObfuscatedDonorCoords(
-                                          donor.districtId,
-                                          donor.uid
-                                        ).lat,
-                                        getObfuscatedDonorCoords(
-                                          donor.districtId,
-                                          donor.uid
-                                        ).lng
-                                      ),
-                                      lang
-                                    )}
+                                    {idx === 0 &&
+                                      (lang === 'bn'
+                                        ? 'সবচেয়ে কাছে · '
+                                        : 'Nearest · ')}
+                                    {formatDistanceKm(distanceKm, lang)}
                                   </span>
                                 </span>
                               )}
@@ -1361,10 +1349,7 @@ export function DonorSearchView({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (
-                                    !firebaseUser &&
-                                    !isDemoRecordId(donor.uid)
-                                  ) {
+                                  if (!firebaseUser) {
                                     onOpenAuth();
                                     return;
                                   }

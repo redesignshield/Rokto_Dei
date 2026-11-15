@@ -3,6 +3,7 @@ name: Verify & Build Android APK
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -45,6 +46,7 @@ jobs:
       - name: Build Production PWA Bundle
         env:
           VITE_API_BASE_URL: ${{ vars.APP_URL || '' }}
+          VITE_GITHUB_REPO: ${{ github.repository }}
         run: npm run build
 
       - name: Upload Web Dist Artifact
@@ -58,9 +60,18 @@ jobs:
     needs: verify
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.app_url == '')
     runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.read_version.outputs.app_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Read App Version from package.json
+        id: read_version
+        run: |
+          APP_VER="$(node -p "require('./package.json').version")"
+          echo "app_version=$APP_VER" >> "$GITHUB_OUTPUT"
+          echo "APP_VERSION=$APP_VER" >> "$GITHUB_ENV"
 
       - name: Download Built Web Bundle
         uses: actions/download-artifact@v4
@@ -104,7 +115,7 @@ jobs:
           cat <<EOF > package.json
           {
             "name": "roktodei-android",
-            "version": "1.0.0",
+            "version": "${APP_VERSION}",
             "private": true
           }
           EOF
@@ -125,7 +136,7 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Configure Rokto Dei App Icons, Splash & Permissions
+      - name: Configure Rokto Dei App Icons, Splash, Version & Permissions
         run: |
           RES_DIR="cap-build/android/app/src/main/res"
           SRC_ICON="public/pwa-512x512.png"
@@ -147,7 +158,6 @@ jobs:
           generate_icon_set xxhdpi 144 324
           generate_icon_set xxxhdpi 192 432
 
-          # Replace any default Capacitor splash screens with Rokto Dei branded splash
           find "$RES_DIR" -name "splash.png" | while read -r splash_file; do
             dims="$(identify -format "%wx%h" "$splash_file" 2>/dev/null || echo "480x800")"
             convert -size "$dims" xc:"#FAF8F9" \( "$SRC_MASKABLE" -resize 220x220 \) -gravity center -composite "$splash_file"
@@ -165,6 +175,16 @@ jobs:
               xml = xml.replace("<application", perms + "\n\n    <application");
               fs.writeFileSync(p, xml);
             }
+
+            const gradlePath = "cap-build/android/app/build.gradle";
+            let gradle = fs.readFileSync(gradlePath, "utf8");
+            const ver = process.env.APP_VERSION || "1.0.0";
+            const [maj = 1, min = 0, pat = 0] = ver.split(".").map(n => parseInt(n, 10) || 0);
+            const verCode = maj * 10000 + min * 100 + pat;
+            gradle = gradle
+              .replace(/versionCode\s+\d+/, `versionCode ${verCode}`)
+              .replace(/versionName\s+"[^"]+"/, `versionName "${ver}"`);
+            fs.writeFileSync(gradlePath, gradle);
           '
 
       - name: Build & Sign Release APK
@@ -194,6 +214,7 @@ jobs:
           SDK_PATH="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           BUILD_TOOLS="$(ls -d "$SDK_PATH"/build-tools/* | sort -V | tail -n 1)"
           UNSIGNED_APK="$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          OUT_APK="RoktoDei-v${APP_VERSION}.apk"
 
           "$BUILD_TOOLS/zipalign" -v -p 4 "$UNSIGNED_APK" RoktoDei-aligned.apk
           "$BUILD_TOOLS/apksigner" sign \
@@ -201,16 +222,55 @@ jobs:
             --ks-key-alias roktodei \
             --ks-pass "pass:$STORE_PASS" \
             --key-pass "pass:$ALIAS_PASS" \
-            --out RoktoDei-v1.0.0.apk \
+            --out "$OUT_APK" \
             RoktoDei-aligned.apk
-          "$BUILD_TOOLS/apksigner" verify RoktoDei-v1.0.0.apk
+          "$BUILD_TOOLS/apksigner" verify "$OUT_APK"
+          sha256sum "$OUT_APK" > "${OUT_APK}.sha256"
 
-      - name: Upload Signed Android APK Artifact
+      - name: Upload Signed Android APK & SHA-256 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: roktodei-android-apk
           if-no-files-found: error
-          path: cap-build/RoktoDei-v1.0.0.apk
+          path: |
+            cap-build/RoktoDei-v*.apk
+            cap-build/RoktoDei-v*.apk.sha256
+
+  publish-github-release:
+    name: Publish GitHub Release (on Tag Push v*)
+    needs: build-capacitor-apk
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Signed APK & SHA-256
+        uses: actions/download-artifact@v4
+        with:
+          name: roktodei-android-apk
+          path: release-assets
+
+      - name: Compose Release Body with SHA-256 Checksum
+        id: compose_body
+        run: |
+          SHA_VAL="$(awk '{print $1}' release-assets/RoktoDei-v*.apk.sha256 | head -n 1)"
+          {
+            echo "BODY<<EOF"
+            echo "## Rokto Dei v${{ needs.build-capacitor-apk.outputs.app_version }}"
+            echo ""
+            echo "### Android APK Integrity Verification"
+            echo "SHA-256: \`$SHA_VAL\`"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: ${{ env.BODY }}
+          files: |
+            release-assets/RoktoDei-v*.apk
+            release-assets/RoktoDei-v*.apk.sha256
 
   build-twa-apk:
     name: Package Play Store TWA APK (Bubblewrap)

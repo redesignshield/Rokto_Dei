@@ -3,6 +3,20 @@ import { useEffect, useState } from 'react';
 const APK_MODE_SESSION_KEY = 'roktodei_apk_mode';
 
 /**
+ * Detects strictly whether the app is running inside a bundled Capacitor native
+ * Android/iOS APK container (where HTML/JS assets live inside the APK rather than HTTPS).
+ */
+export function isNativeCapacitorShell(): boolean {
+  if (typeof window === 'undefined') return false;
+  const cap = (
+    window as unknown as {
+      Capacitor?: { isNativePlatform?: () => boolean };
+    }
+  ).Capacitor;
+  return Boolean(cap?.isNativePlatform?.());
+}
+
+/**
  * Detects whether the app is running inside an installed Android APK / TWA /
  * Capacitor shell or standalone PWA window, as opposed to a standard web browser.
  */

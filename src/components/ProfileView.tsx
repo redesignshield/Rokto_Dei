@@ -20,7 +20,6 @@ import {
   Shield,
   ShieldAlert,
   ShieldCheck,
-  Sparkles,
   Trash2,
   Unlock,
   User,
@@ -37,16 +36,6 @@ import {
   getDistrictsByDivision,
   getUpazilasByDistrict,
 } from '../data/bdLocations';
-import {
-  DEMO_DONATION_RECORDS,
-  getUserDemoDonationRecords,
-  getUserDemoBloodRequest,
-  getUserDemoIncomingPledge,
-  getUserDemoOutgoingPledge,
-  daysOffsetIso,
-  isDemoRecordId,
-} from '../data/removableDemoData';
-import { DemoPreviewBanner } from './DemoPreviewBanner';
 import {
   availabilityLabel,
   contactMethodLabel,
@@ -129,7 +118,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
     isEmailVerified,
     lang,
     setLang,
-    demoMode,
     logout,
     refreshOwnProfileAndDonor,
   } = useAuth();
@@ -239,8 +227,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
 
   // Donation History state
   const [donationRecords, setDonationRecords] = useState<DonationRecord[]>([]);
-  const [demoDeletedIds, setDemoDeletedIds] = useState<Set<string>>(new Set());
-  const [demoProfileLoaded, setDemoProfileLoaded] = useState<boolean>(() => demoMode);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showAddDonationModal, setShowAddDonationModal] = useState(false);
   const [recDate, setRecDate] = useState(new Date().toISOString().slice(0, 10));
@@ -321,31 +307,12 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
       } else if (firebaseUser?.displayName) {
         setDisplayName(firebaseUser.displayName);
       }
-      if (demoMode && demoProfileLoaded) {
-        setBloodGroup('O+');
-        setDivisionId('dhaka');
-        setDistrictId('dhaka');
-        setUpazilaId('dhanmondi');
-        setAgeYears(28);
-        setWeightKg(72);
-        setGender('male');
-        setOccupation('সফটওয়্যার প্রকৌশলী');
-        setPreferredHospitalArea('DMCH, BSMMU, স্কয়ার ও ধানমন্ডি এলাকা');
-        setRawPhone('+8801700000000');
-        setDonorNote('জরুরি প্রয়োজনে যেকোনো সময় রক্ত দিতে প্রস্তুত।');
-        setManualDonationsCount(4);
-        setLastDonationDate(daysOffsetIso(-95));
-        setAvailability('available');
-        setContactMethods(['call', 'whatsapp', 'sms']);
-        setDonationPreference('both');
-        setNightCallPreference('anytime');
-      }
     }
 
     if (ownDonorPhone) {
       setRawPhone(ownDonorPhone);
     }
-  }, [userProfile, ownDonor, ownDonorPhone, firebaseUser, demoMode, demoProfileLoaded]);
+  }, [userProfile, ownDonor, ownDonorPhone, firebaseUser]);
 
   const loadDonationHistory = useCallback(async () => {
     if (!firebaseUser || !isEmailVerified) return;
@@ -413,128 +380,10 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
   const recDistricts = getDistrictsByDivision(recDivisionId);
   const recUpazilas = getUpazilasByDistrict(recDistrictId);
 
-  // User tailored demo records (active when in demoMode and user has no real records yet)
-  const userDemoDonations = useMemo(() => {
-    if (!firebaseUser) return [];
-    return getUserDemoDonationRecords(
-      firebaseUser.uid,
-      displayName || userProfile?.fullName || firebaseUser.displayName || 'রক্তদাতা',
-      bloodGroup || 'O+'
-    ).filter((r) => !demoDeletedIds.has(r.id));
-  }, [firebaseUser, displayName, userProfile?.fullName, bloodGroup, demoDeletedIds]);
-
-  const activeDonationRecords = useMemo(() => {
-    if (donationRecords.length > 0) return donationRecords;
-    if (demoProfileLoaded && demoMode) return userDemoDonations;
-    return [];
-  }, [donationRecords, demoProfileLoaded, demoMode, userDemoDonations]);
-
-  const userDemoRequests = useMemo(() => {
-    if (!firebaseUser) return [];
-    return [
-      getUserDemoBloodRequest(
-        firebaseUser.uid,
-        displayName || userProfile?.fullName || firebaseUser.displayName || 'আমার রক্তের আবেদন',
-        rawPhone || '+8801700000000'
-      ),
-    ];
-  }, [firebaseUser, displayName, userProfile?.fullName, rawPhone]);
-
-  const activeMyRequests = useMemo(() => {
-    if (myRequests.length > 0) return myRequests;
-    if (demoProfileLoaded && demoMode) return userDemoRequests;
-    return [];
-  }, [myRequests, demoProfileLoaded, demoMode, userDemoRequests]);
-
-  const userDemoIncomingPledges = useMemo(() => {
-    if (!firebaseUser || activeMyRequests.length === 0) return [];
-    return [
-      getUserDemoIncomingPledge(firebaseUser.uid, activeMyRequests[0].id),
-    ];
-  }, [firebaseUser, activeMyRequests]);
-
-  const activeIncomingPledges = useMemo(() => {
-    if (incomingPledges.length > 0) return incomingPledges;
-    if (demoProfileLoaded && demoMode) return userDemoIncomingPledges;
-    return [];
-  }, [incomingPledges, demoProfileLoaded, demoMode, userDemoIncomingPledges]);
-
-  const userDemoOutgoingPledges = useMemo(() => {
-    if (!firebaseUser) return [];
-    return [
-      getUserDemoOutgoingPledge(
-        firebaseUser.uid,
-        displayName || userProfile?.fullName || firebaseUser.displayName || 'আমি (ডোনার)',
-        rawPhone || '+8801700000000'
-      ),
-    ];
-  }, [firebaseUser, displayName, userProfile?.fullName, rawPhone]);
-
-  const activeMyPledges = useMemo(() => {
-    if (myPledges.length > 0) return myPledges;
-    if (demoProfileLoaded && demoMode) return userDemoOutgoingPledges;
-    return [];
-  }, [myPledges, demoProfileLoaded, demoMode, userDemoOutgoingPledges]);
-
-  const handleLoadDemoProfileData = () => {
-    setDemoProfileLoaded(true);
-    setDemoDeletedIds(new Set());
-    if (!ownDonor) {
-      setDisplayName(firebaseUser.displayName || 'আকরাম হোসেন (টেস্ট ডোনার)');
-      setBloodGroup('O+');
-      setDivisionId('dhaka');
-      setDistrictId('dhaka');
-      setUpazilaId('dhanmondi');
-      setAgeYears(28);
-      setWeightKg(72);
-      setGender('male');
-      setOccupation('সফটওয়্যার প্রকৌশলী');
-      setPreferredHospitalArea('DMCH, BSMMU, স্কয়ার ও ধানমন্ডি এলাকা');
-      setRawPhone('+8801700000000');
-      setDonorNote('জরুরি প্রয়োজনে যেকোনো সময় রক্ত দিতে প্রস্তুত।');
-      setManualDonationsCount(4);
-      setLastDonationDate(daysOffsetIso(-95));
-      setAvailability('available');
-      setContactMethods(['call', 'whatsapp', 'sms']);
-      setDonationPreference('both');
-      setNightCallPreference('anytime');
-    }
-    setSuccess(
-      lang === 'bn'
-        ? 'টেস্টের জন্য নমুনা প্রোফাইল ও ৪টি রক্তদান ইতিহাস লোড করা হয়েছে।'
-        : 'Sample test profile and 4 donation records loaded.'
-    );
-  };
-
-  const handleClearDemoProfileData = () => {
-    setDemoProfileLoaded(false);
-    setDemoDeletedIds(new Set());
-    if (!ownDonor) {
-      setDisplayName(userProfile?.fullName || firebaseUser.displayName || '');
-      setBloodGroup('O+');
-      setDivisionId('dhaka');
-      setDistrictId('dhaka');
-      setUpazilaId('dhanmondi');
-      setAgeYears(0);
-      setWeightKg(0);
-      setGender('not_specified');
-      setOccupation('');
-      setPreferredHospitalArea('');
-      setRawPhone(ownDonorPhone || '');
-      setDonorNote('');
-      setManualDonationsCount(0);
-      setLastDonationDate('');
-      setAvailability('available');
-      setContactMethods(['call']);
-      setDonationPreference('whole_blood');
-      setNightCallPreference('anytime');
-    }
-    setSuccess(
-      lang === 'bn'
-        ? 'ডেমো টেস্ট ডাটা রিসেট করা হয়েছে।'
-        : 'Demo test data cleared.'
-    );
-  };
+  const activeDonationRecords = donationRecords;
+  const activeMyRequests = myRequests;
+  const activeIncomingPledges = incomingPledges;
+  const activeMyPledges = myPledges;
 
   // Derived Donor Impact Metrics
   const loggedDonationsCount = activeDonationRecords.length;
@@ -877,16 +726,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
   const handleDeleteDonation = async (recordId: string) => {
     setError(null);
     setSuccess(null);
-    if (isDemoRecordId(recordId)) {
-      setDemoDeletedIds((prev) => new Set([...prev, recordId]));
-      setConfirmDeleteRecordId(null);
-      setSuccess(
-        lang === 'bn'
-          ? 'ডেমো রক্তদানের রেকর্ডটি তালিকা থেকে সরানো হয়েছে।'
-          : 'Demo donation record removed.'
-      );
-      return;
-    }
     setSaving(true);
     try {
       await deleteOwnDonationRecord({
@@ -929,15 +768,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
     if (!bookingModalReq) return;
     setError(null);
     setSuccess(null);
-    if (isDemoRecordId(bookingModalReq.id)) {
-      setBookingModalReq(null);
-      setSuccess(
-        lang === 'bn'
-          ? 'ডোনার বুক করা হয়েছে এবং নতুন কল স্বয়ংক্রিয়ভাবে লক করা হয়েছে (টেস্ট সম্পন্ন)।'
-          : 'Donor booked and new incoming calls locked (test complete).'
-      );
-      return;
-    }
     setSaving(true);
     try {
       const otherOfferedIds = incomingPledges
@@ -974,14 +804,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
   const handleReopenRequest = async (requestId: string) => {
     setError(null);
     setSuccess(null);
-    if (isDemoRecordId(requestId)) {
-      setSuccess(
-        lang === 'bn'
-          ? 'অনুরোধটি পুনরায় ওপেন করা হয়েছে—এখন অন্য ডোনাররা কল করতে পারবেন (টেস্ট সম্পন্ন)।'
-          : 'Request re-opened for donor calls (test complete).'
-      );
-      return;
-    }
     setSaving(true);
     try {
       await reopenBookedBloodRequest(requestId);
@@ -1004,18 +826,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
   ) => {
     setError(null);
     setSuccess(null);
-    if (isDemoRecordId(requestId)) {
-      setSuccess(
-        status === 'fulfilled'
-          ? lang === 'bn'
-            ? 'রক্ত সংগৃহীত হিসেবে অনুরোধটি সম্পন্ন করা হয়েছে (টেস্ট সম্পন্ন)।'
-            : 'Request marked fulfilled (test complete).'
-          : lang === 'bn'
-          ? 'অনুরোধটি বাতিল করা হয়েছে (টেস্ট সম্পন্ন)।'
-          : 'Request cancelled (test complete).'
-      );
-      return;
-    }
     setSaving(true);
     try {
       await closeOwnBloodRequest(requestId, status);
@@ -1038,14 +848,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
 
   const handleWithdrawMyPledge = async (pledge: RequestPledge) => {
     setError(null);
-    if (isDemoRecordId(pledge.id)) {
-      setSuccess(
-        lang === 'bn'
-          ? 'প্রতিশ্রুতি সফলভাবে প্রত্যাহার করা হয়েছে (টেস্ট সম্পন্ন)।'
-          : 'Pledge withdrawn (test complete).'
-      );
-      return;
-    }
     setSaving(true);
     try {
       await withdrawRequestPledge(pledge);
@@ -1581,50 +1383,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
           </div>
         ) : (
           <div className="space-y-6">
-            <DemoPreviewBanner />
-
-            {demoMode && (
-              <div className="bg-[#FAF8F9] rounded-2xl border border-neutral-200/90 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                <div className="flex items-start sm:items-center gap-2.5">
-                  <Sparkles className="w-4 h-4 text-[#C80828] shrink-0 mt-0.5 sm:mt-0" />
-                  <div className="text-xs text-neutral-800 leading-relaxed">
-                    <span className="font-bold text-[#1F242D]">
-                      {lang === 'bn' ? 'প্রোফাইল টেস্ট ডেটা:' : 'Profile Test Data:'}
-                    </span>{' '}
-                    <span>
-                      {demoProfileLoaded
-                        ? lang === 'bn'
-                          ? 'আপনার প্রোফাইলে ৪টি রক্তদান ইতিহাস, ওজনের তথ্য ও ১টি বুকড রিকোয়েস্ট টেস্টের জন্য সক্রিয় রয়েছে।'
-                          : 'Sample donor profile and 4 donation logs are loaded for QA testing.'
-                        : lang === 'bn'
-                        ? 'নমুনা তথ্য লোড করে প্রোফাইলের ৪টি সামারি ও লগবই সরাসরি পরীক্ষা করতে পারেন।'
-                        : 'Load sample data to test profile metrics and donation history.'}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {demoProfileLoaded ? (
-                    <button
-                      type="button"
-                      onClick={handleClearDemoProfileData}
-                      className="min-h-[36px] px-3.5 py-1.5 bg-white hover:bg-neutral-100 text-neutral-700 border border-neutral-200 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-neutral-500" />
-                      <span>{lang === 'bn' ? 'টেস্ট ডেটা মুছুন' : 'Clear Test Data'}</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleLoadDemoProfileData}
-                      className="min-h-[36px] px-3.5 py-1.5 bg-[#C80828] hover:bg-[#A3051E] text-white rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>{lang === 'bn' ? 'টেস্ট ডেটা লোড করুন' : 'Load Test Data'}</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
 
             {/* 4-Column Donor Impact & Readiness Summary Strip */}
             <div className="bg-white rounded-3xl border border-neutral-200/80 p-5 sm:p-6 grid grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6">
@@ -2850,22 +2608,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
                         ? 'আপনার পূর্বের বা সদ্য সম্পন্ন রক্তদানের তারিখ, হাসপাতালের নাম এবং রক্তের পরিমাণ (যেমন ৪৫০ ml) যোগ করলে মোট সংখ্যা ও শেষ রক্তদানের তারিখ স্বয়ংক্রিয়ভাবে হিসাব হবে।'
                         : 'Add past or recent donations to automatically calculate total donations, ml volume, and rest days.'}
                     </p>
-                    {demoMode && (
-                      <div className="pt-2">
-                        <button
-                          type="button"
-                          onClick={handleLoadDemoProfileData}
-                          className="min-h-[36px] px-4 py-2 bg-[#FDF2F4] hover:bg-[#FADCE2] text-[#C80828] text-xs font-semibold rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>
-                            {lang === 'bn'
-                              ? 'টেস্টের জন্য ৪টি নমুনা রক্তদান রেকর্ড লোড করুন'
-                              : 'Load 4 Sample Donation Logs for Testing'}
-                          </span>
-                        </button>
-                      </div>
-                    )}
                   </div>
                 ) : (
                   <div className="divide-y divide-neutral-100">
@@ -2882,11 +2624,6 @@ export function ProfileView({ onNavigate }: ProfileViewProps) {
                             <h4 className="text-base font-bold text-[#1F242D]">
                               {rec.hospitalOrCenter}
                             </h4>
-                            {isDemoRecordId(rec.id) && (
-                              <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200 text-[10px] font-semibold">
-                                {lang === 'bn' ? 'নমুনা টেস্ট রেকর্ড' : 'Demo Record'}
-                              </span>
-                            )}
                             <span className="text-xs font-mono tabular-nums font-semibold text-neutral-700">
                               · {rec.donationDate}
                             </span>

@@ -21,11 +21,7 @@ import {
 import { db } from '../firebase';
 import { handleFirestoreError, isOfflineError, OperationType } from '../lib/firestoreError';
 import { useAuth } from './AuthContext';
-import {
-  DEMO_BLOOD_REQUESTS,
-  DEMO_REQUEST_PLEDGES,
-} from '../data/removableDemoData';
-import type { AppView, BloodGroup, NotificationType, RequestPledge } from '../types';
+import type { AppView, BloodGroup, NotificationType } from '../types';
 
 export type { NotificationType };
 
@@ -52,6 +48,8 @@ export interface AppNotification {
     units?: number;
     totalUnits?: number;
     pledgeMessage?: string;
+    isAppUpdate?: boolean;
+    version?: string;
   };
 }
 
@@ -63,7 +61,7 @@ interface NotificationContextValue {
   deleteNotification: (id: string) => void;
   clearAll: () => void;
   addNotification: (
-    item: Omit<AppNotification, 'id' | 'timestamp' | 'read'>
+    item: Omit<AppNotification, 'id' | 'timestamp' | 'read'> & { id?: string }
   ) => void;
 }
 
@@ -144,7 +142,7 @@ export function NotificationProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const { firebaseUser, isEmailVerified, ownDonor, demoMode } = useAuth();
+  const { firebaseUser, isEmailVerified, ownDonor } = useAuth();
   const [readIds, setReadIds] = useState<Set<string>>(() => getStoredReadIds());
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(() =>
     getStoredDismissedIds()
@@ -253,88 +251,8 @@ export function NotificationProvider({
       }
     }
 
-    // 3. Demo / Contextual Blood Request Alerts (Only when Demo Mode is explicitly enabled)
-    if (demoMode) {
-      // Demo pledge on request
-      const pledgeSeed = DEMO_REQUEST_PLEDGES[0];
-      if (pledgeSeed) {
-        list.push({
-          id: 'notif_demo_pledge_01',
-          type: 'pledge_received',
-          titleBn: 'নতুন রক্তদাতা ১ ব্যাগ রক্ত দিতে আগ্রহী!',
-          titleEn: 'Donor Offered 1 Bag of Blood!',
-          messageBn: `${pledgeSeed.donorName} (${pledgeSeed.donorBloodGroup}) আপনার ৩ ব্যাগের অনুরোধে ১ ব্যাগ রক্ত দিতে সম্মতি জানিয়েছেন। ডোনারের প্রোফাইল দেখতে ক্লিক করুন।`,
-          messageEn: `${pledgeSeed.donorName} (${pledgeSeed.donorBloodGroup}) offered to donate 1 bag for your request. Click to view full donor profile.`,
-          timestamp: new Date(Date.now() - 3600000 * 2).toISOString(),
-          read: readIds.has('notif_demo_pledge_01'),
-          targetView: 'blood_requests',
-          targetId: pledgeSeed.requestId,
-          targetDonorUid: pledgeSeed.donorUid || 'demo_donor_01',
-          urgency: 'urgent',
-          metadata: {
-            donorName: pledgeSeed.donorName,
-            donorUid: pledgeSeed.donorUid || 'demo_donor_01',
-            bloodGroup: pledgeSeed.donorBloodGroup,
-            hospitalName: pledgeSeed.hospitalName,
-            requestId: pledgeSeed.requestId,
-            units: 1,
-            totalUnits: 3,
-            pledgeMessage: pledgeSeed.message,
-          },
-        });
-      }
-
-      // Demo donor booked notification (Call locked)
-      const bookedReq = DEMO_BLOOD_REQUESTS.find((r) => r.status === 'booked');
-      if (bookedReq) {
-        list.push({
-          id: 'notif_demo_booked_01',
-          type: 'donor_booked',
-          titleBn: 'ডোনার বুকড — নতুন কল বন্ধ করা হয়েছে',
-          titleEn: 'Donor Booked — Calls Locked',
-          messageBn: `${bookedReq.hospitalName}-এর অনুরোধে ডোনার চূড়ান্ত হওয়ায় নতুন কল বন্ধ রাখা হয়েছে।`,
-          messageEn: `A donor has been booked for the request at ${bookedReq.hospitalName}. Incoming calls are paused.`,
-          timestamp: new Date(Date.now() - 3600000 * 5).toISOString(),
-          read: readIds.has('notif_demo_booked_01'),
-          targetView: 'blood_requests',
-          targetId: bookedReq.id,
-          urgency: 'info',
-          metadata: {
-            hospitalName: bookedReq.hospitalName,
-            bloodGroup: bookedReq.bloodGroup,
-            requestId: bookedReq.id,
-          },
-        });
-      }
-
-      // Demo Emergency Request Alert
-      const emergencyReq = DEMO_BLOOD_REQUESTS.find(
-        (r) => r.urgency === 'emergency' && r.status === 'open'
-      );
-      if (emergencyReq) {
-        list.push({
-          id: 'notif_demo_emergency_01',
-          type: 'emergency_alert',
-          titleBn: `জরুরি ${emergencyReq.bloodGroup} রক্তের প্রয়োজন!`,
-          titleEn: `Emergency ${emergencyReq.bloodGroup} Blood Needed!`,
-          messageBn: `${emergencyReq.hospitalName}-এ আজই ${emergencyReq.units} ব্যাগ ${emergencyReq.bloodGroup} রক্ত প্রয়োজন। যোগাযোগ করুন।`,
-          messageEn: `${emergencyReq.units} bag(s) of ${emergencyReq.bloodGroup} blood needed today at ${emergencyReq.hospitalName}.`,
-          timestamp: new Date(Date.now() - 3600000 * 1).toISOString(),
-          read: readIds.has('notif_demo_emergency_01'),
-          targetView: 'blood_requests',
-          targetId: emergencyReq.id,
-          urgency: 'emergency',
-          metadata: {
-            hospitalName: emergencyReq.hospitalName,
-            bloodGroup: emergencyReq.bloodGroup,
-            requestId: emergencyReq.id,
-          },
-        });
-      }
-    }
-
     return list;
-  }, [firebaseUser, ownDonor, demoMode, readIds]);
+  }, [firebaseUser, ownDonor, readIds]);
 
   // Combine real-time Firestore notifications with custom added and generated notifications
   const allNotifications = useMemo<AppNotification[]>(() => {
@@ -479,15 +397,19 @@ export function NotificationProvider({
   }, [allNotifications, firebaseUser, realtimeNotifs]);
 
   const addNotification = useCallback(
-    (item: Omit<AppNotification, 'id' | 'timestamp' | 'read'>) => {
+    (item: Omit<AppNotification, 'id' | 'timestamp' | 'read'> & { id?: string }) => {
+      const { id: customId, ...rest } = item;
+      const resolvedId =
+        customId ||
+        `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const newNotif: AppNotification = {
-        ...item,
-        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        ...rest,
+        id: resolvedId,
         timestamp: new Date().toISOString(),
         read: false,
       };
       setCustomNotifs((prev) => {
-        const next = [newNotif, ...prev];
+        const next = [newNotif, ...prev.filter((n) => n.id !== resolvedId)];
         saveStoredCustomNotifs(next);
         return next;
       });

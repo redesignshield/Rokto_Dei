@@ -875,7 +875,8 @@
             "reopen_blood_request",
             "remove_donation_record",
             "grant_moderator",
-            "revoke_moderator"
+            "revoke_moderator",
+            "publish_app_release"
           ],
           "description": "Privileged action identifier."
         },
@@ -887,7 +888,8 @@
             "report",
             "blood_request",
             "donation_record",
-            "admin_role"
+            "admin_role",
+            "app_config"
           ],
           "description": "Target resource category."
         },
@@ -1082,6 +1084,86 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "AppReleaseConfig": {
+      "title": "AppReleaseConfig",
+      "description": "Super-Admin controlled release manifest for Web, PWA, and Android APK update notifications.",
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 20,
+          "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$",
+          "description": "Latest published semantic version (e.g., 1.1.0)."
+        },
+        "minSupportedVersion": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 20,
+          "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$",
+          "description": "Minimum safe version before critical security update warning."
+        },
+        "releaseNotesBn": {
+          "type": "string",
+          "maxLength": 800,
+          "description": "Bengali release changelog displayed in the update popup."
+        },
+        "releaseNotesEn": {
+          "type": "string",
+          "maxLength": 800,
+          "description": "English release changelog displayed in the update popup."
+        },
+        "githubRepo": {
+          "type": "string",
+          "maxLength": 165,
+          "description": "Optional owner/repo slug on GitHub for automatic release polling."
+        },
+        "releaseUrl": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Pinned GitHub Releases URL for release notes or download."
+        },
+        "apkDownloadUrl": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Pinned GitHub Release APK download asset URL."
+        },
+        "sha256Checksum": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Optional 64-character SHA-256 checksum of the signed APK."
+        },
+        "isCriticalUpdate": {
+          "type": "boolean",
+          "description": "Whether the release patches a critical issue or requires prompt action."
+        },
+        "publishedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Super Admin UID who published the release."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of release publication."
+        }
+      },
+      "required": [
+        "version",
+        "minSupportedVersion",
+        "releaseNotesBn",
+        "releaseNotesEn",
+        "githubRepo",
+        "releaseUrl",
+        "apkDownloadUrl",
+        "sha256Checksum",
+        "isCriticalUpdate",
+        "publishedBy",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -1136,6 +1218,10 @@
     "/usernames/{usernameLower}": {
       "schema": { "$ref": "#/entities/UsernameReservation" },
       "description": "Unique username registry index documents where document ID is the lowercase username."
+    },
+    "/appConfig/{configId}": {
+      "schema": { "$ref": "#/entities/AppReleaseConfig" },
+      "description": "Authoritative non-PII app release and version metadata document (release)."
     }
   }
 }

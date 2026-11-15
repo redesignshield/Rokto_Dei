@@ -330,10 +330,11 @@ service cloud.firestore {
           'suspend_user', 'restore_user', 'unlist_donor', 'relist_donor',
           'resolve_report', 'dismiss_report', 'review_report',
           'remove_blood_request', 'reopen_blood_request',
-          'remove_donation_record', 'grant_moderator', 'revoke_moderator'
+          'remove_donation_record', 'grant_moderator', 'revoke_moderator',
+          'publish_app_release'
         ] &&
         data.targetType is string && data.targetType in [
-          'user', 'donor', 'report', 'blood_request', 'donation_record', 'admin_role'
+          'user', 'donor', 'report', 'blood_request', 'donation_record', 'admin_role', 'app_config'
         ] &&
         isValidId(data.targetId) &&
         data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 400 &&
@@ -384,6 +385,55 @@ service cloud.firestore {
         data.usernameLower is string && data.usernameLower == usernameLower &&
         data.usernameLower.matches('^[a-z0-9_]+$') &&
         data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSemVer(ver) {
+      return ver is string &&
+        ver.size() >= 5 &&
+        ver.size() <= 20 &&
+        ver.matches('^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,4}$');
+    }
+
+    function isValidGithubRepo(repo) {
+      return repo is string &&
+        repo.size() <= 165 &&
+        (repo == '' || repo.matches('^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$'));
+    }
+
+    function isTrustedReleaseUrl(url) {
+      return url is string &&
+        url.size() <= 300 &&
+        (url == '' || url.matches('^https://github\\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(/.*)?$'));
+    }
+
+    function isValidSha256(hash) {
+      return hash is string &&
+        hash.size() <= 64 &&
+        (hash == '' || hash.matches('^[a-fA-F0-9]{64}$'));
+    }
+
+    function isValidReleaseConfig(data) {
+      return data.keys().hasAll([
+          'version', 'minSupportedVersion', 'releaseNotesBn', 'releaseNotesEn',
+          'githubRepo', 'releaseUrl', 'apkDownloadUrl', 'sha256Checksum',
+          'isCriticalUpdate', 'publishedBy', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'version', 'minSupportedVersion', 'releaseNotesBn', 'releaseNotesEn',
+          'githubRepo', 'releaseUrl', 'apkDownloadUrl', 'sha256Checksum',
+          'isCriticalUpdate', 'publishedBy', 'updatedAt'
+        ]) &&
+        isValidSemVer(data.version) &&
+        isValidSemVer(data.minSupportedVersion) &&
+        data.releaseNotesBn is string && data.releaseNotesBn.size() <= 800 &&
+        data.releaseNotesEn is string && data.releaseNotesEn.size() <= 800 &&
+        isValidGithubRepo(data.githubRepo) &&
+        isTrustedReleaseUrl(data.releaseUrl) &&
+        isTrustedReleaseUrl(data.apkDownloadUrl) &&
+        isValidSha256(data.sha256Checksum) &&
+        data.isCriticalUpdate is bool &&
+        isValidId(data.publishedBy) &&
         data.updatedAt is timestamp;
     }
 
@@ -984,6 +1034,22 @@ service cloud.firestore {
 
       allow delete: if isVerifiedEmail() &&
         (existing().uid == request.auth.uid || isAdmin());
+    }
+
+    // =========================================================================
+    // 14. App Release Config (/appConfig/{configId}) — Public Safe Release Feed
+    // =========================================================================
+    match /appConfig/{configId} {
+      allow get: if configId == 'release';
+      allow list: if false;
+
+      allow create, update: if isBootstrappedAdmin() &&
+        configId == 'release' &&
+        isValidReleaseConfig(incoming()) &&
+        incoming().publishedBy == request.auth.uid &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if false;
     }
   }
 }
