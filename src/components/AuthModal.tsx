@@ -12,6 +12,7 @@ import {
   APK_GOOGLE_BRIDGE_UNAVAILABLE_CODE,
   useAuth,
 } from '../contexts/AuthContext';
+import { isNativeCapacitorShell } from '../lib/platform';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -40,6 +41,7 @@ export function AuthModal({
     lang,
   } = useAuth();
 
+  const isApkShell = isNativeCapacitorShell();
   const [mode, setMode] = useState<AuthMode>('login');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -365,18 +367,54 @@ export function AuthModal({
           {/* Primary Login & Register View */}
           {(mode === 'login' || mode === 'register') && (
             <>
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={handleGoogle}
-                className="w-full min-h-[48px] px-4 py-2.5 bg-[#1F242D] hover:bg-neutral-800 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2.5 cursor-pointer"
-              >
-                <span>
-                  {lang === 'bn'
-                    ? 'Google দিয়ে দ্রুত লগইন করুন (তাৎক্ষণিক ভেরিফায়েড)'
-                    : 'Continue with Google (Instant Verified)'}
-                </span>
-              </button>
+              {isApkShell ? (
+                <div className="space-y-1.5">
+                  <div className="relative rounded-xl overflow-hidden select-none border border-neutral-200">
+                    <button
+                      type="button"
+                      disabled
+                      aria-disabled="true"
+                      className="w-full min-h-[48px] px-4 py-2.5 bg-[#1F242D]/60 text-white/60 text-sm font-semibold rounded-xl flex items-center justify-center gap-2.5 cursor-not-allowed blur-[0.4px]"
+                    >
+                      <span>
+                        {lang === 'bn'
+                          ? 'Google দিয়ে দ্রুত লগইন করুন'
+                          : 'Continue with Google'}
+                      </span>
+                    </button>
+                    <div
+                      aria-label={
+                        lang === 'bn'
+                          ? 'Google লগইন আপকামিং'
+                          : 'Google Sign-In Upcoming'
+                      }
+                      className="absolute inset-0 bg-[#1F242D]/40 backdrop-blur-[1px] flex items-center justify-center cursor-not-allowed"
+                    >
+                      <span className="px-3 py-1 rounded-lg bg-amber-400 text-[#1F242D] text-[11px] font-extrabold uppercase tracking-widest shadow-md border border-amber-200 -rotate-2">
+                        Upcoming
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-neutral-500 text-center leading-snug">
+                    {lang === 'bn'
+                      ? 'APK-তে Google লগইন পরবর্তী আপডেটে আসছে। আপাতত নিচের ইমেইল ও পাসওয়ার্ড ব্যবহার করুন।'
+                      : 'Google login for APK is coming soon. Please use Email & Password below.'}
+                  </p>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleGoogle}
+                  className="w-full min-h-[48px] px-4 py-2.5 bg-[#1F242D] hover:bg-neutral-800 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2.5 cursor-pointer"
+                >
+                  <span>
+                    {lang === 'bn'
+                      ? 'Google দিয়ে দ্রুত লগইন করুন (তাৎক্ষণিক ভেরিফায়েড)'
+                      : 'Continue with Google (Instant Verified)'}
+                  </span>
+                </button>
+              )}
 
               <div className="flex items-center gap-3 text-xs text-neutral-400">
                 <div className="h-px flex-1 bg-neutral-200" />
