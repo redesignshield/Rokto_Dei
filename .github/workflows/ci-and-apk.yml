@@ -245,7 +245,10 @@ jobs:
           ALIAS_PASS="${KEY_PASS:-$STORE_PASS}"
 
           if [ -n "$KEYSTORE_B64" ]; then
-            printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode > android.keystore
+            if ! printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode > android.keystore; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 secret is invalid or incomplete. Update it with the full Base64 text (starting with MII...) or remove the secret to build with a temporary keystore."
+              exit 1
+            fi
           else
             keytool -genkeypair -v \
               -keystore android.keystore \
